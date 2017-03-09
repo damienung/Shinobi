@@ -20,19 +20,20 @@
 process.on('uncaughtException', (err) => {
     console.error('uncaughtException', err);
 });
+
+let express = require('express');
+let app = express();
+let server = require('./modules/server.js').getServer(app);
+let io = require('socket.io')(server);
+
 let fs = require('fs');
 let os = require('os');
 let path = require('path');
 let mysql = require('mysql');
 let moment = require('moment');
 let request = require("request");
-let express = require('express');
-let app = express();
-let http = require('http');
-let server = http.Server(app);
 let bodyParser = require('body-parser');
 let ejs = require('ejs');
-let io = require('socket.io')(server);
 let execSync = require('child_process').execSync;
 let exec = require('child_process').exec;
 let spawn = require('child_process').spawn;
@@ -43,13 +44,6 @@ let events = require('events');
 let df = require('node-df');
 let Cam = require('onvif').Cam;
 let config = require('./conf.json');
-
-server.listen(config.port);
-try {
-    console.log('Shinobi - PORT : ' + config.port + ', NODE.JS : ' + execSync("node -v"));
-} catch (err) {
-    console.log('Shinobi - PORT : ' + config.port);
-}
 
 s = { child_help: false, platform: os.platform(), s: JSON.stringify };
 s.disc = () => {
