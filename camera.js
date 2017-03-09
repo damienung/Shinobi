@@ -32,7 +32,7 @@ let path = require('path');
 let mysql = require('mysql');
 let moment = require('moment');
 let request = require("request");
-let bodyParser = require('body-parser');
+
 let ejs = require('ejs');
 let execSync = require('child_process').execSync;
 let exec = require('child_process').exec;
@@ -66,7 +66,7 @@ s.disc();
 s.ffmpegKill = () => { exec("ps aux | grep -ie ffmpeg | awk '{print $2}' | xargs kill -9") };
 process.on('exit', s.ffmpegKill.bind(null, { cleanup: true }));
 process.on('SIGINT', s.ffmpegKill.bind(null, { exit: true }));
-////close open videos
+////c= '' }lose open videos
 sql.query('SELECT * FROM Videos WHERE status=?', [0], (err, r) => {
     if (r && r[0]) {
         r.forEach((v) => {
@@ -1653,22 +1653,11 @@ s.auth = (xx, x, res, req) => {
     }
 }
 
-////Pages
-app.use(express.static(s.dir.videos));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.set('views', __dirname + '/web/pages');
-app.set('view engine', 'ejs');
-//readme
-app.get('/info', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
-});
-//main page
-app.get('/', (req, res) => {
-    res.render('index');
-});
+let router = require('./modules/router.js');
+router.route(app);
+
 //update server
-app.get('/:auth/update/:key', (req, res) => {
+let updateAuthKeyHandler = (req, res) => {
     req.ret = { ok: false };
     res.setHeader('Content-Type', 'application/json');
     req.fn = () => {
@@ -1685,45 +1674,53 @@ app.get('/:auth/update/:key', (req, res) => {
         res.send(s.s(req.ret, null, 3));
     }
     s.auth(req.params, req.fn, res, req);
-});
+}
+app.get('/:auth/update/:key', updateAuthKeyHandler);
+
 //register function
-app.post('/:auth/register/:ke/:uid', (req, res) => {
-        req.resp = { ok: false };
-        res.setHeader('Content-Type', 'application/json');
-        s.auth(req.params, () => {
-            sql.query('SELECT * FROM Users WHERE uid=? AND ke=? AND details NOT LIKE ? LIMIT 1', [req.params.uid, req.params.ke, '%"sub"%'], (err, u) => {
-                if (u && u[0]) {
-                    if (req.body.mail !== '' && req.body.pass !== '') {
-                        if (req.body.pass === req.body.password_again) {
-                            sql.query('SELECT * FROM Users WHERE mail=?', [req.body.mail], (err, r) => {
-                                if (r && r[0]) { //found one exist
-                                    req.resp.msg = 'Email address is in use.';
-                                } else { //create new
-                                    req.resp.msg = 'New Account Created';
-                                    req.resp.ok = true;
-                                    req.gid = s.gid();
-                                    sql.query('INSERT INTO Users (ke,uid,mail,pass,details) VALUES (?,?,?,?,?)', [req.params.ke, req.gid, req.body.mail, s.md5(req.body.pass), '{"sub":"1"}'])
-                                    s.tx({ f: 'add_sub_account', ke: req.params.ke, uid: req.gid, mail: req.body.mail }, 'ADM_' + req.params.ke);
-                                }
-                                res.send(s.s(req.resp, null, 3));
-                            })
-                        } else {
-                            req.resp.msg = 'Passwords Don\'t Match';
-                        }
+let registerUserHandler = (req, res) => {
+    req.resp = { ok: false };
+    res.setHeader('Content-Type', 'application/json');
+    s.auth(req.params, () => {
+        sql.query('SELECT * FROM Users WHERE uid=? AND ke=? AND details NOT LIKE ? LIMIT 1', [req.params.uid, req.params.ke, '%"sub"%'], (err, u) => {
+            if (u && u[0]) {
+                if (req.body.mail !== '' && req.body.pass !== '') {
+                    if (req.body.pass === req.body.password_again) {
+                        sql.query('SELECT * FROM Users WHERE mail=?', [req.body.mail], (err, r) => {
+                            if (r && r[0]) { //found one exist
+                                req.resp.msg = 'Email address is in use.';
+                            } else { //create new
+                                req.resp.msg = 'New Account Created';
+                                req.resp.ok = true;
+                                req.gid = s.gid();
+                                sql.query('INSERT INTO Users (ke,uid,mail,pass,details) VALUES (?,?,?,?,?)', [req.params.ke, req.gid, req.body.mail, s.md5(req.body.pass), '{"sub":"1"}'])
+                                s.tx({ f: 'add_sub_account', ke: req.params.ke, uid: req.gid, mail: req.body.mail }, 'ADM_' + req.params.ke);
+                            }
+                            res.send(s.s(req.resp, null, 3));
+                        })
                     } else {
-                        req.resp.msg = 'Fields cannot be empty';
+                        req.resp.msg = 'Passwords Don\'t Match';
                     }
                 } else {
-                    req.resp.msg = 'Not an Administrator Account';
+                    req.resp.msg = 'Fields cannot be empty';
                 }
-                if (req.resp.msg) {
-                    res.send(s.s(req.resp, null, 3));
-                }
-            })
-        }, res, req);
-    })
-    //login function
-app.post('/', (req, res) => {
+            } else {
+                req.resp.msg = 'Not an Administrator Account';
+            }
+            if (req.resp.msg) {
+                res.send(s.s(req.resp, null, 3));
+            }
+        })
+    }, res, req);
+}
+
+app.post('/:auth/register/:ke/:uid', registerUserHandler);
+
+
+
+
+//login function
+let loginHandler = (req, res) => {
     if (req.body.mail && req.body.pass) {
         sql.query('SELECT * FROM Users WHERE mail=? AND pass=?', [req.body.mail, s.md5(req.body.pass)], (err, r) => {
             req.resp = { ok: false };
@@ -1763,7 +1760,11 @@ app.post('/', (req, res) => {
             }
         })
     }
-});
+}
+
+app.post('/', loginHandler);
+
+
 // Get HLS stream (m3u8)
 app.get('/:auth/hls/:ke/:id/:file', (req, res) => {
     req.fn = () => {
