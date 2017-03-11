@@ -29,7 +29,7 @@ let io = require('socket.io')(server);
 let fs = require('fs');
 let os = require('os');
 let path = require('path');
-let mysql = require('mysql');
+//let mysql = require('mysql');
 let moment = require('moment');
 let request = require("request");
 
@@ -46,22 +46,8 @@ let Cam = require('onvif').Cam;
 let config = require('./conf.json');
 
 s = { child_help: false, platform: os.platform(), s: JSON.stringify };
-s.disc = () => {
-    sql = mysql.createConnection(config.db);
-    sql.connect((err) => {
-        if (err) {
-            console.log('Error Connecting : DB', err);
-            setTimeout(s.disc, 2000);
-        }
-    });
-    sql.on('error', (err) => {
-        console.log('DB Lost.. Retrying..');
-        console.log(err);
-        s.disc();
-        return;
-    });
-}
-s.disc();
+let sql = require('./modules/database.js').getConnection();
+
 //kill any ffmpeg running
 s.ffmpegKill = () => { exec("ps aux | grep -ie ffmpeg | awk '{print $2}' | xargs kill -9") };
 process.on('exit', s.ffmpegKill.bind(null, { cleanup: true }));
@@ -1507,7 +1493,7 @@ io.on('connection', (cn) => {
                             }
                             break;
                     }
-                })
+                }, null, null, sql)
             }
         })
         //functions for webcam recorder
@@ -1597,7 +1583,7 @@ io.on('connection', (cn) => {
                         tx({ f: 'monitor_watch_on', id: d.id, ke: d.ke }, 'MON_' + d.id)
                         s.tx({ viewers: Object.keys(s.group[d.ke].mon[d.id].watch).length, ke: d.ke, id: d.id }, 'MON_' + d.id)
                     }
-                });
+                }, null, null, sql);
                 break;
         }
     })
@@ -1630,17 +1616,17 @@ io.on('connection', (cn) => {
 });
 //Authenticator
 s.api = {};
-s.auth = (xx, x, res, req) => {
-    if (s.group[xx.ke] && s.group[xx.ke].users && s.group[xx.ke].users[xx.auth]) {
-        x();
+s.auth = (reqParams, authenticationFunction, res, req, db) => {
+    if (s.group[reqParams.ke] && s.group[reqParams.ke].users && s.group[reqParams.ke].users[reqParams.auth]) {
+        authenticationFunction();
     } else {
-        if (s.api[xx.auth]) {
-            x();
+        if (s.api[reqParams.auth]) {
+            authenticationFunction();
         } else {
-            sql.query('SELECT * FROM API WHERE code=?', [xx.auth], (err, r) => {
+            db.query('SELECT * FROM API WHERE code=?', [reqParams.auth], (err, r) => {
                 if (r && r[0]) {
-                    s.api[xx.auth] = {};
-                    x();
+                    s.api[reqParams.auth] = {};
+                    authenticationFunction();
                 } else {
                     if (req) {
                         if (!req.ret) { req.ret = { ok: false } }
@@ -1673,7 +1659,7 @@ let updateAuthKeyHandler = (req, res) => {
         }
         res.send(s.s(req.ret, null, 3));
     }
-    s.auth(req.params, req.fn, res, req);
+    s.auth(req.params, req.fn, res, req, sql);
 }
 app.get('/:auth/update/:key', updateAuthKeyHandler);
 
@@ -1681,37 +1667,39 @@ app.get('/:auth/update/:key', updateAuthKeyHandler);
 let registerUserHandler = (req, res) => {
     req.resp = { ok: false };
     res.setHeader('Content-Type', 'application/json');
+
     s.auth(req.params, () => {
-        sql.query('SELECT * FROM Users WHERE uid=? AND ke=? AND details NOT LIKE ? LIMIT 1', [req.params.uid, req.params.ke, '%"sub"%'], (err, u) => {
-            if (u && u[0]) {
-                if (req.body.mail !== '' && req.body.pass !== '') {
-                    if (req.body.pass === req.body.password_again) {
-                        sql.query('SELECT * FROM Users WHERE mail=?', [req.body.mail], (err, r) => {
-                            if (r && r[0]) { //found one exist
-                                req.resp.msg = 'Email address is in use.';
-                            } else { //create new
-                                req.resp.msg = 'New Account Created';
-                                req.resp.ok = true;
-                                req.gid = s.gid();
-                                sql.query('INSERT INTO Users (ke,uid,mail,pass,details) VALUES (?,?,?,?,?)', [req.params.ke, req.gid, req.body.mail, s.md5(req.body.pass), '{"sub":"1"}'])
-                                s.tx({ f: 'add_sub_account', ke: req.params.ke, uid: req.gid, mail: req.body.mail }, 'ADM_' + req.params.ke);
-                            }
-                            res.send(s.s(req.resp, null, 3));
-                        })
-                    } else {
-                        req.resp.msg = 'Passwords Don\'t Match';
-                    }
-                } else {
-                    req.resp.msg = 'Fields cannot be empty';
-                }
-            } else {
+        sql.query('SELECT * FROM Users WHERE uid=? AND ke=? AND details NOT LIKE ? LIMIT 1', [req.params.uid, req.params.ke, '%"sub"%'], (err, users) => {
+            if (!users || !users[0]) {
                 req.resp.msg = 'Not an Administrator Account';
             }
+
+            if (req.body.mail === '' || req.body.pass === '') {
+                req.resp.msg = 'Fields cannot be empty';
+            }
+
+            if (req.body.pass !== req.body.password_again) {
+                req.resp.msg = 'Passwords Don\'t Match';
+            }
+
+            sql.query('SELECT count(*) FROM Users WHERE mail=?', [req.body.mail], (err, count) => {
+                if (count[0]['count(*)'] > 0) { //found one exist
+                    req.resp.msg = 'Email address is in use.';
+                } else { //create new
+                    req.resp.msg = 'New Account Created';
+                    req.resp.ok = true;
+                    req.gid = s.gid();
+                    sql.query('INSERT INTO Users (ke,uid,mail,pass,details) VALUES (?,?,?,?,?)', [req.params.ke, req.gid, req.body.mail, s.md5(req.body.pass), '{"sub":"1"}'])
+                    s.tx({ f: 'add_sub_account', ke: req.params.ke, uid: req.gid, mail: req.body.mail }, 'ADM_' + req.params.ke);
+                }
+                res.send(s.s(req.resp, null, 3));
+            })
+
             if (req.resp.msg) {
                 res.send(s.s(req.resp, null, 3));
             }
         })
-    }, res, req);
+    }, res, req, sql);
 }
 
 app.post('/:auth/register/:ke/:uid', registerUserHandler);
@@ -1775,7 +1763,7 @@ app.get('/:auth/hls/:ke/:id/:file', (req, res) => {
             res.send('File Not Found')
         }
     }
-    s.auth(req.params, req.fn, res, req);
+    s.auth(req.params, req.fn, res, req, sql);
 });
 //Get MJPEG stream
 app.get(['/:auth/mjpeg/:ke/:id', '/:auth/mjpeg/:ke/:id/:addon'], (req, res) => {
@@ -1807,7 +1795,7 @@ app.get(['/:auth/mjpeg/:ke/:id', '/:auth/mjpeg/:ke/:id/:addon'], (req, res) => {
             } else {
                 res.end();
             }
-        }, res, req);
+        }, res, req, sql);
     }
 });
 //embed monitor
@@ -1820,7 +1808,7 @@ app.get(['/:auth/embed/:ke/:id', '/:auth/embed/:ke/:id/:addon'], (req, res) => {
             if (r && r[0]) { r = r[0]; }
             res.render("embed", { data: req.params, baseUrl: req.protocol + '://' + req.hostname, port: config.port, mon: r });
         })
-    }, res, req);
+    }, res, req, sql);
 });
 // Get monitors json
 app.get(['/:auth/monitor/:ke', '/:auth/monitor/:ke/:id'], (req, res) => {
@@ -1838,7 +1826,7 @@ app.get(['/:auth/monitor/:ke', '/:auth/monitor/:ke/:id'], (req, res) => {
             res.send(s.s(r, null, 3));
         })
     }
-    s.auth(req.params, req.fn, res, req);
+    s.auth(req.params, req.fn, res, req, sql);
 });
 // Get videos json
 app.get(['/:auth/videos/:ke', '/:auth/videos/:ke/:id', '/:auth/videos/:ke/:id'], (req, res) => {
@@ -1857,7 +1845,7 @@ app.get(['/:auth/videos/:ke', '/:auth/videos/:ke/:id', '/:auth/videos/:ke/:id'],
             })
             res.send(s.s(r, null, 3));
         })
-    }, res, req);
+    }, res, req, sql);
 });
 // Get events json (motion logs)
 app.get(['/:auth/events/:ke', '/:auth/events/:ke/:id', '/:auth/events/:ke/:id/:limit', '/:auth/events/:ke/:id/:limit/:start', '/:auth/events/:ke/:id/:limit/:start/:end'], (req, res) => {
@@ -1892,7 +1880,7 @@ app.get(['/:auth/events/:ke', '/:auth/events/:ke/:id', '/:auth/events/:ke/:id/:l
             })
             res.send(s.s(r, null, 3));
         })
-    }, res, req);
+    }, res, req, sql);
 });
 // Get logs json
 app.get(['/:auth/logs/:ke', '/:auth/logs/:ke/:id', '/:auth/logs/:ke/:limit', '/:auth/logs/:ke/:id/:limit'], (req, res) => {
@@ -1915,7 +1903,7 @@ app.get(['/:auth/logs/:ke', '/:auth/logs/:ke/:id', '/:auth/logs/:ke/:limit', '/:
             })
             res.send(s.s(r, null, 3));
         })
-    }, res, req);
+    }, res, req, sql);
 });
 // Get monitors online json
 app.get('/:auth/smonitor/:ke', (req, res) => {
@@ -1936,7 +1924,7 @@ app.get('/:auth/smonitor/:ke', (req, res) => {
             res.send(s.s(req.ar, null, 3));
         })
     }
-    s.auth(req.params, req.fn, res, req);
+    s.auth(req.params, req.fn, res, req, sql);
 });
 // Control monitor mode via HTTP
 app.get(['/:auth/monitor/:ke/:mid/:f', '/:auth/monitor/:ke/:mid/:f/:ff', '/:auth/monitor/:ke/:mid/:f/:ff/:fff'], (req, res) => {
@@ -2009,7 +1997,7 @@ app.get(['/:auth/monitor/:ke/:mid/:f', '/:auth/monitor/:ke/:mid/:f/:ff', '/:auth
                 res.send(s.s(req.ret, null, 3));
             })
         }
-        s.auth(req.params, req.fn, res, req);
+        s.auth(req.params, req.fn, res, req, sql);
     })
     // Get lib files
 app.get(['/libs/:f/:f2', '/libs/:f/:f2/:f3'], (req, res) => {
@@ -2032,7 +2020,7 @@ app.get('/:auth/videos/:ke/:id/:file', (req, res) => {
             res.send('File Not Found')
         }
     }
-    s.auth(req.params, req.fn, res, req);
+    s.auth(req.params, req.fn, res, req, sql);
 });
 //modify video file
 app.get(['/:auth/videos/:ke/:id/:file/:mode', '/:auth/videos/:ke/:id/:file/:mode/:f'], (req, res) => {
@@ -2069,7 +2057,7 @@ app.get(['/:auth/videos/:ke/:id/:file/:mode', '/:auth/videos/:ke/:id/:file/:mode
                 }
                 res.send(s.s(req.ret, null, 3));
             })
-        }, res, req);
+        }, res, req, sql);
     })
     //preliminary monitor start
 setTimeout(() => {
