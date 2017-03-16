@@ -29,7 +29,6 @@ let io = require('socket.io')(server);
 let fs = require('fs');
 let os = require('os');
 let path = require('path');
-//let mysql = require('mysql');
 let moment = require('moment');
 let request = require("request");
 
@@ -44,48 +43,35 @@ let events = require('events');
 let df = require('node-df');
 let Cam = require('onvif').Cam;
 let config = require('./conf.json');
+let videofeed = require('./modules/videofeed.js');
 
 s = { child_help: false, platform: os.platform(), s: JSON.stringify };
 let sql = require('./modules/database.js').getConnection();
 
-//kill any ffmpeg running
-s.ffmpegKill = () => { exec("ps aux | grep -ie ffmpeg | awk '{print $2}' | xargs kill -9") };
-process.on('exit', s.ffmpegKill.bind(null, { cleanup: true }));
-process.on('SIGINT', s.ffmpegKill.bind(null, { exit: true }));
-////c= '' }lose open videos
-sql.query('SELECT * FROM Videos WHERE status=?', [0], (err, r) => {
-    if (r && r[0]) {
-        r.forEach((v) => {
-            s.init(0, v);
-            v.filename = s.moment(v.time);
-            s.video('close', v);
-            //            delete(s.group[v.ke].mon[v.mid]);
-        })
-    }
-})
+videofeed.killOpenVideoFeeds();
 
 //key for child servers
 s.child_nodes = {};
 s.child_key = '3123asdasdf1dtj1hjk23sdfaasd12asdasddfdbtnkkfgvesra3asdsd3123afdsfqw345';
-s.md5 = (x) => { return crypto.createHash('md5').update(x).digest("hex"); }
+s.md5 = (x) => { return crypto.createHash('md5').update(x).digest("hex"); };
 s.tx = (z, y, x) => {
-    if (x) { return x.broadcast.to(y).emit('f', z) };
+    if (x) { return x.broadcast.to(y).emit('f', z); }
     io.to(y).emit('f', z);
-}
+};
 s.cx = (z, y, x) => {
-    if (x) { return x.broadcast.to(y).emit('c', z) };
+    if (x) { return x.broadcast.to(y).emit('c', z); }
     io.to(y).emit('c', z);
-}
+};
 
 //load camera controller vars
 s.nameToTime = (x) => {
     x = x.split('.')[0].split('T'), x[1] = x[1].replace(/-/g, ':');
     x = x.join(' ');
     return x;
-}
-s.ratio = (width, height, ratio) => { ratio = width / height; return (Math.abs(ratio - 4 / 3) < Math.abs(ratio - 16 / 9)) ? '4:3' : '16:9'; }
+};
+s.ratio = (width, height, ratio) => { ratio = width / height; return (Math.abs(ratio - 4 / 3) < Math.abs(ratio - 16 / 9)) ? '4:3' : '16:9'; };
 s.gid = (x) => {
-    if (!x) { x = 10 };
+    if (!x) { x = 10; }
     let t = "";
     let p = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     for (let i = 0; i < x; i++)
@@ -93,23 +79,23 @@ s.gid = (x) => {
     return t;
 };
 s.moment = (e, x) => {
-    if (!e) { e = new Date };
-    if (!x) { x = 'YYYY-MM-DDTHH-mm-ss' };
+    if (!e) { e = new Date(); }
+    if (!x) { x = 'YYYY-MM-DDTHH-mm-ss'; }
     e = moment(e);
     if (config.utcOffset) { e = e.utcOffset(config.utcOffset) }
     return e.format(x);
-}
+};
 s.moment_noOffset = (e, x) => {
-    if (!e) { e = new Date };
-    if (!x) { x = 'YYYY-MM-DDTHH-mm-ss' };
+    if (!e) { e = new Date(); }
+    if (!x) { x = 'YYYY-MM-DDTHH-mm-ss'; }
     return moment(e).format(x);
-}
+};
 s.ipRange = (start_ip, end_ip) => {
     let start_long = s.toLong(start_ip);
     let end_long = s.toLong(end_ip);
     if (start_long > end_long) {
         let tmp = start_long;
-        start_long = end_long
+        start_long = end_long;
         end_long = tmp;
     }
     let range_array = [];
@@ -118,15 +104,15 @@ s.ipRange = (start_ip, end_ip) => {
         range_array.push(s.fromLong(i));
     }
     return range_array;
-}
+};
 s.portRange = (lowEnd, highEnd) => {
-        let list = [];
-        for (let i = lowEnd; i <= highEnd; i++) {
-            list.push(i);
-        }
-        return list;
+    let list = [];
+    for (let i = lowEnd; i <= highEnd; i++) {
+        list.push(i);
     }
-    //toLong taken from NPM package 'ip' 
+    return list;
+};
+//toLong taken from NPM package 'ip' 
 s.toLong = (ip) => {
     let ipl = 0;
     ip.split('.').forEach((octet) => {
@@ -157,42 +143,42 @@ s.kill = (x, e, p) => {
         if (e && s.group[e.ke].mon[e.id].record) {
             clearTimeout(s.group[e.ke].mon[e.id].record.capturing);
             //            if(s.group[e.ke].mon[e.id].record.request){s.group[e.ke].mon[e.id].record.request.abort();delete(s.group[e.ke].mon[e.id].record.request);}
-        };
+        }
         if (s.group[e.ke].mon[e.id].child_node) {
             s.cx({ f: 'kill', d: s.init('clean', e) }, s.group[e.ke].mon[e.id].child_node_id)
         } else {
-            if (!x || x === 1) { return };
+            if (!x || x === 1) { return; }
             p = x.pid;
             x.stdin.pause();
             setTimeout(() => {
                 x.kill('SIGTERM');
                 delete(x);
-                setTimeout(() => { exec('kill -9 ' + p) }, 1000)
-            }, 1000)
+                setTimeout(() => { exec('kill -9 ' + p); }, 1000);
+            }, 1000);
         }
     }
-}
+};
 s.log = (e, x) => {
-        if (!x || !e.mid) { return }
-        if (e.details && e.details.sqllog == 1) {
-            sql.query('INSERT INTO Logs (ke,mid,info) VALUES (?,?,?)', [e.ke, e.mid, s.s(x)]);
-        }
-        s.tx({ f: 'log', ke: e.ke, mid: e.mid, log: x, time: moment() }, 'GRP_' + e.ke);
-        //    console.log('s.log : ',{f:'log',ke:e.ke,mid:e.mid,log:x,time:moment()},'GRP_'+e.ke)
+    if (!x || !e.mid) { return; }
+    if (e.details && e.details.sqllog == 1) {
+        sql.query('INSERT INTO Logs (ke,mid,info) VALUES (?,?,?)', [e.ke, e.mid, s.s(x)]);
     }
-    //directories
+    s.tx({ f: 'log', ke: e.ke, mid: e.mid, log: x, time: moment() }, 'GRP_' + e.ke);
+    //    console.log('s.log : ',{f:'log',ke:e.ke,mid:e.mid,log:x,time:moment()},'GRP_'+e.ke)
+};
+//directories
 s.group = {};
 if (!config.defaultMjpeg) { config.defaultMjpeg = __dirname + '/web/libs/img/bg.jpg' }
 //default stream folder check
 if (!config.streamDir) {
-    config.streamDir = '/dev/shm'
+    config.streamDir = '/dev/shm';
     if (!fs.existsSync(config.streamDir)) {
-        config.streamDir = __dirname + '/streams/'
+        config.streamDir = __dirname + '/streams/';
     } else {
-        config.streamDir += '/streams/'
+        config.streamDir += '/streams/';
     }
 }
-if (!config.videosDir) { config.videosDir = __dirname + '/videos/' }
+if (!config.videosDir) { config.videosDir = __dirname + '/videos/'; }
 s.dir = { videos: config.videosDir, streams: config.streamDir };
 //streams dir
 if (!fs.existsSync(s.dir.streams)) {
@@ -204,19 +190,19 @@ if (!fs.existsSync(s.dir.videos)) {
 }
 ////Camera Controller
 s.init = (x, e) => {
-    if (!e) { e = {} }
+    if (!e) { e = {}; }
     switch (x) {
         case 0: //camera
-            if (!s.group[e.ke]) { s.group[e.ke] = {} };
-            if (!s.group[e.ke].mon) { s.group[e.ke].mon = {} }
-            if (!s.group[e.ke].users) { s.group[e.ke].users = {} }
-            if (!s.group[e.ke].mon[e.mid]) { s.group[e.ke].mon[e.mid] = {} }
-            if (!s.group[e.ke].mon[e.mid].watch) { s.group[e.ke].mon[e.mid].watch = {} };
-            if (e.type === 'record') { e.record = 1 } else { e.record = 0 }
-            if (!s.group[e.ke].mon[e.mid].record) { s.group[e.ke].mon[e.mid].record = { yes: e.record } };
-            if (!s.group[e.ke].mon[e.mid].started) { s.group[e.ke].mon[e.mid].started = 0 };
-            if (s.group[e.ke].mon[e.mid].delete) { clearTimeout(s.group[e.ke].mon[e.mid].delete) }
-            s.init('apps', e)
+            if (!s.group[e.ke]) { s.group[e.ke] = {}; }
+            if (!s.group[e.ke].mon) { s.group[e.ke].mon = {}; }
+            if (!s.group[e.ke].users) { s.group[e.ke].users = {}; }
+            if (!s.group[e.ke].mon[e.mid]) { s.group[e.ke].mon[e.mid] = {}; }
+            if (!s.group[e.ke].mon[e.mid].watch) { s.group[e.ke].mon[e.mid].watch = {}; }
+            if (e.type === 'record') { e.record = 1; } else { e.record = 0; }
+            if (!s.group[e.ke].mon[e.mid].record) { s.group[e.ke].mon[e.mid].record = { yes: e.record }; }
+            if (!s.group[e.ke].mon[e.mid].started) { s.group[e.ke].mon[e.mid].started = 0; }
+            if (s.group[e.ke].mon[e.mid].delete) { clearTimeout(s.group[e.ke].mon[e.mid].delete); }
+            s.init('apps', e);
             break;
         case 'apps':
             if (!s.group[e.ke].init) {
@@ -264,55 +250,52 @@ s.init = (x, e) => {
                 if (v !== 'last_frame' && v !== 'record' && v !== 'spawn' && v !== 'running' && (v !== 'time' && typeof e[v] !== 'function')) { x.ar[v] = e[v]; }
             });
             return x.ar;
-            break;
         case 'url':
             e.authd = '';
             if (e.details.muser && e.details.muser !== '' && e.details.mpass && e.details.mpass !== '' && e.host.indexOf('@') === -1) {
                 e.authd = e.details.muser + ':' + e.details.mpass + '@';
             }
-            if (e.port == 80) { e.porty = '' } else { e.porty = ':' + e.port }
+            if (e.port == 80) { e.porty = ''; } else { e.porty = ':' + e.port }
             e.url = e.protocol + '://' + e.authd + e.host + e.porty + e.path;
             return e.url;
-            break;
         case 'url_no_path':
             e.authd = '';
-            if (!e.details.muser) { e.details.muser = '' }
-            if (!e.details.mpass) { e.details.mpass = '' }
+            if (!e.details.muser) { e.details.muser = ''; }
+            if (!e.details.mpass) { e.details.mpass = ''; }
             if (e.details.muser !== '' && e.host.indexOf('@') === -1) {
                 e.authd = e.details.muser + ':' + e.details.mpass + '@';
             }
-            if (e.port == 80) { e.porty = '' } else { e.porty = ':' + e.port }
+            if (e.port == 80) { e.porty = '' } else { e.porty = ':' + e.port; }
             e.url = e.protocol + '://' + e.authd + e.host + e.porty;
             return e.url;
-            break;
     }
-    if (typeof e.callback === 'function') { setTimeout(() => { e.callback() }, 500); }
+    if (typeof e.callback === 'function') { setTimeout(() => { e.callback(); }, 500); }
 }
 s.video = (x, e) => {
-    if (!e) { e = {} };
-    if (e.mid && !e.id) { e.id = e.mid };
+    if (!e) { e = {}; }
+    if (e.mid && !e.id) { e.id = e.mid; }
     switch (x) {
         case 'delete':
             e.dir = s.dir.videos + e.ke + '/' + e.id + '/';
-            if (!e.status) { e.status = 0 }
+            if (!e.status) { e.status = 0; }
             e.save = [e.id, e.ke, s.nameToTime(e.filename), e.status];
             sql.query('DELETE FROM Videos WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save, (err, r) => {
-                s.tx({ f: 'video_delete', filename: e.filename + '.' + e.ext, mid: e.mid, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
-                s.file('delete', e.dir + e.filename + '.' + e.ext)
-            })
+                s.tx({ f: 'video_delete', filename: e.filename + '.' + e.ext, mid: e.mid, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
+                s.file('delete', e.dir + e.filename + '.' + e.ext);
+            });
             break;
         case 'open':
             e.save = [e.id, e.ke, s.nameToTime(e.filename), e.ext];
-            if (!e.status) { e.save.push(0) } else { e.save.push(e.status) }
+            if (!e.status) { e.save.push(0); } else { e.save.push(e.status); }
             sql.query('INSERT INTO Videos (mid,ke,time,ext,status) VALUES (?,?,?,?,?)', e.save)
-            s.tx({ f: 'video_build_start', filename: e.filename + '.' + e.ext, mid: e.id, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
+            s.tx({ f: 'video_build_start', filename: e.filename + '.' + e.ext, mid: e.id, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
             break;
         case 'close':
             e.dir = s.dir.videos + e.ke + '/' + e.id + '/';
             if (s.group[e.ke] && s.group[e.ke].mon[e.id]) {
                 if (s.group[e.ke].mon[e.id].open && !e.filename) {
                     e.filename = s.group[e.ke].mon[e.id].open;
-                    e.ext = s.group[e.ke].mon[e.id].open_ext
+                    e.ext = s.group[e.ke].mon[e.id].open_ext;
                 }
                 if (s.group[e.ke].mon[e.id].child_node) {
                     s.cx({ f: 'close', d: s.init('clean', e) }, s.group[e.ke].mon[e.id].child_node_id);
@@ -321,7 +304,7 @@ s.video = (x, e) => {
                         e.filesize = fs.statSync(e.dir + e.filename + '.' + e.ext)["size"];
                         if ((e.filesize / 100000).toFixed(2) > 0.25) {
                             e.save = [e.filesize, e.frames, 1, e.id, e.ke, s.nameToTime(e.filename)];
-                            if (!e.status) { e.save.push(0) } else { e.save.push(e.status) }
+                            if (!e.status) { e.save.push(0) } else { e.save.push(e.status); }
                             sql.query('UPDATE Videos SET `size`=?,`frames`=?,`status`=? WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save)
                             s.tx({ f: 'video_build_success', filename: e.filename + '.' + e.ext, mid: e.id, ke: e.ke, time: s.nameToTime(e.filename), size: e.filesize, end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
 
@@ -338,11 +321,11 @@ s.video = (x, e) => {
                             }
                         } else {
                             s.video('delete', e);
-                            s.log(e, { type: 'File Corrupt', msg: { ffmpeg: s.group[e.ke].mon[e.mid].ffmpeg, filesize: (e.filesize / 100000).toFixed(2) } })
+                            s.log(e, { type: 'File Corrupt', msg: { ffmpeg: s.group[e.ke].mon[e.mid].ffmpeg, filesize: (e.filesize / 100000).toFixed(2) } });
                         }
                     } else {
                         s.video('delete', e);
-                        s.log(e, { type: 'File Not Exist', msg: 'Cannot save non existant file. Something went wrong.', ffmpeg: s.group[e.ke].mon[e.id].ffmpeg })
+                        s.log(e, { type: 'File Not Exist', msg: 'Cannot save non existant file. Something went wrong.', ffmpeg: s.group[e.ke].mon[e.id].ffmpeg });
                     }
                 }
             }
@@ -350,12 +333,12 @@ s.video = (x, e) => {
             //            s.init('sync',e)
             break;
     }
-}
+};
 s.ffmpeg = (e, x) => {
-    if (!x) { x = { tmp: '' } }
+    if (!x) { x = { tmp: '' }; }
     x.watch = '', x.cust_input = '', x.cust_detect = ' ';
     //analyze duration
-    if (e.details.aduration && e.details.aduration !== '') { x.cust_input += ' -analyzeduration ' + e.details.aduration };
+    if (e.details.aduration && e.details.aduration !== '') { x.cust_input += ' -analyzeduration ' + e.details.aduration; }
     //segmenting
     x.segment = ' -f segment -segment_atclocktime 1 -reset_timestamps 1 -strftime 1 -segment_list pipe:2 -segment_time ' + (60 * e.cutoff) + ' ';
     if (e.details.dqf == '1') {
@@ -385,7 +368,7 @@ s.ffmpeg = (e, x) => {
     //timestamp options
     if (e.details.timestamp && e.details.timestamp == "1") {
         //font
-        if (e.details.timestamp_font && e.details.timestamp_font !== '') { x.time_font = e.details.timestamp_font } else { x.time_font = '/usr/share/fonts/truetype/freefont/FreeSans.ttf' }
+        if (e.details.timestamp_font && e.details.timestamp_font !== '') { x.time_font = e.details.timestamp_font; } else { x.time_font = '/usr/share/fonts/truetype/freefont/FreeSans.ttf' }
         //position x
         if (e.details.timestamp_x && e.details.timestamp_x !== '') { x.timex = e.details.timestamp_x } else { x.timex = '(w-tw)/2' }
         //position y
