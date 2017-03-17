@@ -58,6 +58,11 @@ s.tx = (z, y, x) => {
     if (x) { return x.broadcast.to(y).emit('f', z); }
     io.to(y).emit('f', z);
 };
+
+s.emitToRoom = (data, room) => {
+    io.to(room).emit('f', data);
+};
+
 s.cx = (z, y, x) => {
     if (x) { return x.broadcast.to(y).emit('c', z); }
     io.to(y).emit('c', z);
@@ -163,7 +168,7 @@ s.log = (e, x) => {
     if (e.details && e.details.sqllog == 1) {
         sql.query('INSERT INTO Logs (ke,mid,info) VALUES (?,?,?)', [e.ke, e.mid, s.s(x)]);
     }
-    s.tx({ f: 'log', ke: e.ke, mid: e.mid, log: x, time: moment() }, 'GRP_' + e.ke);
+    s.emitToRoom({ f: 'log', ke: e.ke, mid: e.mid, log: x, time: moment() }, 'GRP_' + e.ke);
     //    console.log('s.log : ',{f:'log',ke:e.ke,mid:e.mid,log:x,time:moment()},'GRP_'+e.ke)
 };
 //directories
@@ -270,7 +275,25 @@ s.init = (x, e) => {
             return e.url;
     }
     if (typeof e.callback === 'function') { setTimeout(() => { e.callback(); }, 500); }
-}
+};
+
+let deleteVideo = (videoID, videoKey, videoRootPath, videoStatus, fileName, extension) => {
+    videoPath = videoRootPath + videoKey + '/' + videoID + '/';
+    if (!videoStatus) { videoStatus = 0; }
+    e.save = [videoID, videoKey, s.nameToTime(fileName), videoStatus];
+    sql.query('DELETE FROM Videos WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save, (err, r) => {
+        s.emitToRoom({
+            f: 'video_delete',
+            filename: fileName + '.' + extension,
+            mid: videoID,
+            ke: videoKey,
+            time: s.nameToTime(fileName),
+            end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss')
+        }, 'GRP_' + videoKey);
+        s.file('delete', videoPath + fileName + '.' + extension);
+    });
+};
+
 s.video = (x, e) => {
     if (!e) { e = {}; }
     if (e.mid && !e.id) { e.id = e.mid; }
@@ -280,7 +303,7 @@ s.video = (x, e) => {
             if (!e.status) { e.status = 0; }
             e.save = [e.id, e.ke, s.nameToTime(e.filename), e.status];
             sql.query('DELETE FROM Videos WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save, (err, r) => {
-                s.tx({ f: 'video_delete', filename: e.filename + '.' + e.ext, mid: e.mid, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
+                s.emitToRoom({ f: 'video_delete', filename: e.filename + '.' + e.ext, mid: e.mid, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
                 s.file('delete', e.dir + e.filename + '.' + e.ext);
             });
             break;
@@ -288,7 +311,14 @@ s.video = (x, e) => {
             e.save = [e.id, e.ke, s.nameToTime(e.filename), e.ext];
             if (!e.status) { e.save.push(0); } else { e.save.push(e.status); }
             sql.query('INSERT INTO Videos (mid,ke,time,ext,status) VALUES (?,?,?,?,?)', e.save)
-            s.tx({ f: 'video_build_start', filename: e.filename + '.' + e.ext, mid: e.id, ke: e.ke, time: s.nameToTime(e.filename), end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
+            s.emitToRoom({
+                f: 'video_build_start',
+                filename: e.filename + '.' + e.ext,
+                mid: e.id,
+                ke: e.ke,
+                time: s.nameToTime(e.filename),
+                end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss')
+            }, 'GRP_' + e.ke);
             break;
         case 'close':
             e.dir = s.dir.videos + e.ke + '/' + e.id + '/';
@@ -306,7 +336,15 @@ s.video = (x, e) => {
                             e.save = [e.filesize, e.frames, 1, e.id, e.ke, s.nameToTime(e.filename)];
                             if (!e.status) { e.save.push(0) } else { e.save.push(e.status); }
                             sql.query('UPDATE Videos SET `size`=?,`frames`=?,`status`=? WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save)
-                            s.tx({ f: 'video_build_success', filename: e.filename + '.' + e.ext, mid: e.id, ke: e.ke, time: s.nameToTime(e.filename), size: e.filesize, end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + e.ke);
+                            s.emitToRoom({
+                                f: 'video_build_success',
+                                filename: e.filename + '.' + e.ext,
+                                mid: e.id,
+                                ke: e.ke,
+                                time: s.nameToTime(e.filename),
+                                size: e.filesize,
+                                end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss')
+                            }, 'GRP_' + e.ke);
 
                             //cloud auto savers
                             //webdav
@@ -559,22 +597,55 @@ s.camera = (x, e, cn, tx) => {
                         if (e.mon.type === 'local') { e.url = e.mon.path; }
                         e.spawn = spawn('ffmpeg', ('-loglevel quiet -i ' + e.url + ' -s 400x400 -r 25 -ss 1.8 -frames:v 1 -f singlejpeg pipe:1').split(' '))
                         e.spawn.stdout.on('data', (data) => {
-                            s.tx({ f: 'monitor_snapshot', snapshot: data.toString('base64'), snapshot_format: 'b64', mid: e.mid, ke: e.ke }, 'GRP_' + e.ke)
+                            s.emitToRoom({
+                                f: 'monitor_snapshot',
+                                snapshot: data.toString('base64'),
+                                snapshot_format: 'b64',
+                                mid: e.mid,
+                                ke: e.ke
+                            }, 'GRP_' + e.ke)
                             e.spawn.kill();
                         });
                         break;
                     case 'jpeg':
                         request({ url: e.url, method: 'GET', encoding: null }, (err, data) => {
-                            if (err) { s.tx({ f: 'monitor_snapshot', snapshot: 'No Image', snapshot_format: 'plc', mid: e.mid, ke: e.ke }, 'GRP_' + e.ke); return };
-                            s.tx({ f: 'monitor_snapshot', snapshot: data.body, snapshot_format: 'ab', mid: e.mid, ke: e.ke }, 'GRP_' + e.ke)
+                            if (err) {
+                                s.emitToRoom({
+                                    f: 'monitor_snapshot',
+                                    snapshot: 'No Image',
+                                    snapshot_format: 'plc',
+                                    mid: e.mid,
+                                    ke: e.ke
+                                }, 'GRP_' + e.ke);
+                                return
+                            };
+                            s.emitToRoom({
+                                f: 'monitor_snapshot',
+                                snapshot: data.body,
+                                snapshot_format: 'ab',
+                                mid: e.mid,
+                                ke: e.ke
+                            }, 'GRP_' + e.ke)
                         })
                         break;
                     default:
-                        s.tx({ f: 'monitor_snapshot', snapshot: '...', snapshot_format: 'plc', mid: e.mid, ke: e.ke }, 'GRP_' + e.ke)
+                        s.emitToRoom({
+                            f: 'monitor_snapshot',
+                            snapshot: '...',
+                            snapshot_format: 'plc',
+                            mid: e.mid,
+                            ke: e.ke
+                        }, 'GRP_' + e.ke)
                         break;
                 }
             } else {
-                s.tx({ f: 'monitor_snapshot', snapshot: 'Disabled', snapshot_format: 'plc', mid: e.mid, ke: e.ke }, 'GRP_' + e.ke)
+                s.emitToRoom({
+                    f: 'monitor_snapshot',
+                    snapshot: 'Disabled',
+                    snapshot_format: 'plc',
+                    mid: e.mid,
+                    ke: e.ke
+                }, 'GRP_' + e.ke)
             }
             break;
         case 'record_off': //stop recording and start
@@ -611,8 +682,19 @@ s.camera = (x, e, cn, tx) => {
             } else {
                 e.ob = 0;
             }
-            if (tx) { tx({ f: 'monitor_watch_off', ke: e.ke, id: e.id, cnid: cn.id }) };
-            s.tx({ viewers: e.ob, ke: e.ke, id: e.id }, 'MON_' + e.id);
+            if (tx) {
+                tx({
+                    f: 'monitor_watch_off',
+                    ke: e.ke,
+                    id: e.id,
+                    cnid: cn.id
+                })
+            };
+            s.emitToRoom({
+                viewers: e.ob,
+                ke: e.ke,
+                id: e.id
+            }, 'MON_' + e.id);
             break;
         case 'stop': //stop monitor
             if (!s.group[e.ke] || !s.group[e.ke].mon[e.id]) { return }
@@ -631,7 +713,13 @@ s.camera = (x, e, cn, tx) => {
             s.group[e.ke].mon[e.id].started = 0;
             if (s.group[e.ke].mon[e.id].record) { s.group[e.ke].mon[e.id].record.yes = 0 }
             s.log(e, { type: 'Monitor Stopped', msg: 'Monitor session has been ordered to stop.' });
-            s.tx({ f: 'monitor_stopping', mid: e.id, ke: e.ke, time: s.moment(), reason: e.reason }, 'GRP_' + e.ke);
+            s.emitToRoom({
+                f: 'monitor_stopping',
+                mid: e.id,
+                ke: e.ke,
+                time: s.moment(),
+                reason: e.reason
+            }, 'GRP_' + e.ke);
             s.camera('snapshot', { mid: e.id, ke: e.ke, mon: e })
             if (e.delete === 1) {
                 s.group[e.ke].mon[e.id].delete = setTimeout(() => { delete(s.group[e.ke].mon[e.id]); }, 60000 * 60);
@@ -742,7 +830,12 @@ s.camera = (x, e, cn, tx) => {
                                     if (!e.details.stream_mjpeg_clients || e.details.stream_mjpeg_clients === '' || isNaN(e.details.stream_mjpeg_clients) === false) { e.details.stream_mjpeg_clients = 20; } else { e.details.stream_mjpeg_clients = parseInt(e.details.stream_mjpeg_clients) }
                                     s.group[e.ke].mon[e.id].emitter = new events.EventEmitter().setMaxListeners(e.details.stream_mjpeg_clients);
                                     s.log(e, { type: 'FFMPEG Process Started', msg: { cmd: s.group[e.ke].mon[e.id].ffmpeg } });
-                                    s.tx({ f: 'monitor_starting', mode: x, mid: e.id, time: s.moment() }, 'GRP_' + e.ke);
+                                    s.emitToRoom({
+                                        f: 'monitor_starting',
+                                        mode: x,
+                                        mid: e.id,
+                                        time: s.moment()
+                                    }, 'GRP_' + e.ke);
                                     //start workers
                                     if (e.type === 'jpeg') {
                                         if (!e.details.sfps || e.details.sfps === '') {
@@ -816,7 +909,14 @@ s.camera = (x, e, cn, tx) => {
                                         //frames from motion detect
                                     s.group[e.ke].mon[e.id].spawn.stdin.on('data', (d) => {
                                             if (s.ocv && e.details.detector === '1') {
-                                                s.tx({ f: 'frame', mon: s.group[e.ke].mon_conf[e.id].details, ke: e.ke, id: e.id, time: s.moment(), frame: d }, s.ocv.id);
+                                                s.emitToRoom({
+                                                    f: 'frame',
+                                                    mon: s.group[e.ke].mon_conf[e.id].details,
+                                                    ke: e.ke,
+                                                    id: e.id,
+                                                    time: s.moment(),
+                                                    frame: d
+                                                }, s.ocv.id);
                                             };
                                         })
                                         //frames to stream
@@ -840,7 +940,14 @@ s.camera = (x, e, cn, tx) => {
                                                     }
                                                     if ((d[d.length - 2] === 0xFF && d[d.length - 1] === 0xD9)) {
                                                         e.buffer = Buffer.concat(e.buffer);
-                                                        s.tx({ f: 'monitor_frame', ke: e.ke, id: e.id, time: s.moment(), frame: e.buffer.toString('base64'), frame_format: 'b64' }, 'MON_' + e.id);
+                                                        s.emitToRoom({
+                                                            f: 'monitor_frame',
+                                                            ke: e.ke,
+                                                            id: e.id,
+                                                            time: s.moment(),
+                                                            frame: e.buffer.toString('base64'),
+                                                            frame_format: 'b64'
+                                                        }, 'MON_' + e.id);
                                                         e.buffer = null;
                                                     }
                                                 }
@@ -909,7 +1016,10 @@ s.camera = (x, e, cn, tx) => {
                         } catch (err) {
                             ++e.error_count;
                             console.error('Frame Capture Error ' + e.id, err);
-                            s.tx({ f: 'error', data: err }, 'GRP_2Df5hBE');
+                            s.emitToRoom({
+                                f: 'error',
+                                data: err
+                            }, 'GRP_2Df5hBE');
                         }
                     } else {
                         s.kill(s.group[e.ke].mon[e.id].spawn, e);
@@ -1156,7 +1266,14 @@ io.on('connection', (cn) => {
                                         setTimeout(() => {
                                             request({ url: d.base + d.m.details['control_url_' + d.direction + '_stop'], method: 'GET' }, (er, dat) => {
                                                 if (err) { s.log(d, { type: 'Control Error', msg: err }); return false }
-                                                s.tx({ f: 'control', ok: data, mid: d.mid, ke: d.ke, direction: d.direction, url_stop: true });
+                                                s.emitToRoom({
+                                                    f: 'control',
+                                                    ok: data,
+                                                    mid: d.mid,
+                                                    ke: d.ke,
+                                                    direction: d.direction,
+                                                    url_stop: true
+                                                });
                                             })
                                         }, d.m.details.control_url_stop_timeout)
                                     } else {
@@ -1169,7 +1286,12 @@ io.on('connection', (cn) => {
                                 if (d.mid) {
                                     d.delete = 1;
                                     s.camera('stop', d);
-                                    s.tx({ f: 'monitor_delete', uid: cn.uid, mid: d.mid, ke: cn.ke }, 'GRP_' + d.ke);
+                                    s.emitToRoom({
+                                        f: 'monitor_delete',
+                                        uid: cn.uid,
+                                        mid: d.mid,
+                                        ke: cn.ke
+                                    }, 'GRP_' + d.ke);
                                     s.log(d, { type: 'Monitor Deleted', msg: 'by user : ' + cn.uid });
                                     sql.query('DELETE FROM Monitors WHERE ke=? AND mid=?', [d.ke, d.mid])
                                 }
@@ -1213,8 +1335,8 @@ io.on('connection', (cn) => {
                                             s.camera('stop', d.mon);
                                             setTimeout(() => { s.camera(d.mon.mode, d.mon); }, 5000)
                                         };
-                                        s.tx(d.tx, 'GRP_' + d.mon.ke);
-                                        s.tx(d.tx, 'STR_' + d.mon.ke);
+                                        s.emitToRoom(d.tx, 'GRP_' + d.mon.ke);
+                                        s.emitToRoom(d.tx, 'STR_' + d.mon.ke);
                                     })
                                 }
                                 break;
@@ -1247,14 +1369,22 @@ io.on('connection', (cn) => {
                                 if (s.group[d.ke] && s.group[d.ke].mon && s.group[d.ke].mon[d.id] && s.group[d.ke].mon[d.id].watch) {
 
                                     tx({ f: 'monitor_watch_on', id: d.id, ke: d.ke }, 'MON_' + d.id)
-                                    s.tx({ viewers: Object.keys(s.group[d.ke].mon[d.id].watch).length, ke: d.ke, id: d.id }, 'MON_' + d.id)
+                                    s.emitToRoom({
+                                        viewers: Object.keys(s.group[d.ke].mon[d.id].watch).length,
+                                        ke: d.ke,
+                                        id: d.id
+                                    }, 'MON_' + d.id)
                                 }
                                 break;
                             case 'watch_off':
                                 if (!d.ke) { d.ke = cn.ke; };
                                 cn.leave('MON_' + d.id);
                                 s.camera(d.ff, d, cn, tx);
-                                s.tx({ viewers: d.ob, ke: d.ke, id: d.id }, 'MON_' + d.id)
+                                s.emitToRoom({
+                                    viewers: d.ob,
+                                    ke: d.ke,
+                                    id: d.id
+                                }, 'MON_' + d.id)
                                 break;
                             case 'start':
                             case 'stop':
@@ -1379,12 +1509,20 @@ io.on('connection', (cn) => {
                 case 'init':
                     s.ocv = { started: moment(), id: cn.id, plug: d.plug };
                     cn.ocv = 1;
-                    s.tx({ f: 'detector_plugged', plug: d.plug }, 'CPU')
+                    s.emitToRoom({
+                        f: 'detector_plugged',
+                        plug: d.plug
+                    }, 'CPU')
                     console.log('Connected to plugin : Detector - ' + d.plug)
                     break;
                 case 'trigger':
                     //got a frame rendered with a marker
-                    s.tx({ f: 'detector_trigger', id: d.id, ke: d.ke, details: d.details }, 'GRP_' + d.ke);
+                    s.emitToRoom({
+                        f: 'detector_trigger',
+                        id: d.id,
+                        ke: d.ke,
+                        details: d.details
+                    }, 'GRP_' + d.ke);
                     if (d.ke && d.id && s.group[d.ke] && s.group[d.ke].mon_conf[d.id]) {
                         d.mon = s.group[d.ke].mon_conf[d.id];
                         if (s.group[d.ke].mon_conf[d.id].details.detector_trigger == '1') {
@@ -1437,7 +1575,7 @@ io.on('connection', (cn) => {
 
                     break;
                 case 's.tx':
-                    s.tx(d.data, d.to)
+                    s.emitToRoom(d.data, d.to)
                     break;
                 case 'start':
                 case 'end':
@@ -1471,7 +1609,12 @@ io.on('connection', (cn) => {
                             switch (d.ff) {
                                 case 'delete':
                                     sql.query('DELETE FROM Users WHERE uid=? AND ke=? AND mail=?', [d.$uid, cn.ke, d.mail])
-                                    s.tx({ f: 'delete_sub_account', ke: cn.ke, uid: d.$uid, mail: d.mail }, 'ADM_' + d.ke);
+                                    s.emitToRoom({
+                                        f: 'delete_sub_account',
+                                        ke: cn.ke,
+                                        uid: d.$uid,
+                                        mail: d.mail
+                                    }, 'ADM_' + d.ke);
                                     break;
                             }
                             break;
@@ -1484,9 +1627,20 @@ io.on('connection', (cn) => {
             if (!s.group[d.ke] || !s.group[d.ke].mon[d.mid]) { return }
             switch (d.f) {
                 case 'monitor_frame':
-                    if (s.group[d.ke].mon[d.mid].started !== 1) { s.tx({ error: 'Not Started' }, cn.id); return false };
+                    if (s.group[d.ke].mon[d.mid].started !== 1) {
+                        s.emitToRoom({
+                            error: 'Not Started'
+                        }, cn.id);
+                        return false
+                    };
                     if (s.group[d.ke] && s.group[d.ke].mon[d.mid] && s.group[d.ke].mon[d.mid].watch && Object.keys(s.group[d.ke].mon[d.mid].watch).length > 0) {
-                        s.tx({ f: 'monitor_frame', ke: d.ke, id: d.mid, time: s.moment(), frame: d.frame.toString('base64') }, 'MON_' + d.mid);
+                        s.emitToRoom({
+                            f: 'monitor_frame',
+                            ke: d.ke,
+                            id: d.mid,
+                            time: s.moment(),
+                            frame: d.frame.toString('base64')
+                        }, 'MON_' + d.mid);
 
                     }
                     if (s.group[d.ke].mon[d.mid].record.yes === 1) {
@@ -1520,7 +1674,7 @@ io.on('connection', (cn) => {
                         s.camera(d.mode, d.data)
                         break;
                     case 's.tx':
-                        s.tx(d.data, d.to)
+                        s.emitToRoom(d.data, d.to)
                         break;
                     case 's.log':
                         s.log(d.data, d.to)
@@ -1533,7 +1687,14 @@ io.on('connection', (cn) => {
                                 return console.error('created_file' + d.d.mid, err);
                             }
                             tx({ f: 'delete_file', file: d.filename, ke: d.d.ke, mid: d.d.mid });
-                            s.tx({ f: 'video_build_success', filename: s.group[d.d.ke].mon[d.d.mid].open + '.' + s.group[d.d.ke].mon[d.d.mid].open_ext, mid: d.d.mid, ke: d.d.ke, time: s.nameToTime(s.group[d.d.ke].mon[d.d.mid].open), end: s.moment_noOffset(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + d.d.ke);
+                            s.emitToRoom({
+                                f: 'video_build_success',
+                                filename: s.group[d.d.ke].mon[d.d.mid].open + '.' + s.group[d.d.ke].mon[d.d.mid].open_ext,
+                                mid: d.d.mid,
+                                ke: d.d.ke,
+                                time: s.nameToTime(s.group[d.d.ke].mon[d.d.mid].open),
+                                end: s.moment_noOffset(new Date, 'YYYY-MM-DD HH:mm:ss')
+                            }, 'GRP_' + d.d.ke);
                         });
                         break;
                 }
@@ -1564,7 +1725,11 @@ io.on('connection', (cn) => {
                     if (s.group[d.ke] && s.group[d.ke].mon && s.group[d.ke].mon[d.id] && s.group[d.ke].mon[d.id].watch) {
 
                         tx({ f: 'monitor_watch_on', id: d.id, ke: d.ke }, 'MON_' + d.id)
-                        s.tx({ viewers: Object.keys(s.group[d.ke].mon[d.id].watch).length, ke: d.ke, id: d.id }, 'MON_' + d.id)
+                        s.emitToRoom({
+                            viewers: Object.keys(s.group[d.ke].mon[d.id].watch).length,
+                            ke: d.ke,
+                            id: d.id
+                        }, 'MON_' + d.id)
                     }
                 }, null, null, sql);
                 break;
@@ -1586,7 +1751,7 @@ io.on('connection', (cn) => {
             //            delete(s.group[cn.ke].vid[cn.id]);
         }
         if (cn.ocv) {
-            s.tx({ f: 'detector_unplugged', plug: s.ocv.plug }, 'CPU')
+            s.emitToRoom({ f: 'detector_unplugged', plug: s.ocv.plug }, 'CPU')
             delete(s.ocv);
         }
         if (cn.cron) {
@@ -1673,7 +1838,12 @@ let registerUserHandler = (req, res) => {
                     req.resp.ok = true;
                     req.gid = s.gid();
                     sql.query('INSERT INTO Users (ke,uid,mail,pass,details) VALUES (?,?,?,?,?)', [req.params.ke, req.gid, req.body.mail, s.md5(req.body.pass), '{"sub":"1"}'])
-                    s.tx({ f: 'add_sub_account', ke: req.params.ke, uid: req.gid, mail: req.body.mail }, 'ADM_' + req.params.ke);
+                    s.emitToRoom({
+                        f: 'add_sub_account',
+                        ke: req.params.ke,
+                        uid: req.gid,
+                        mail: req.body.mail
+                    }, 'ADM_' + req.params.ke);
                 }
                 res.send(s.s(req.resp, null, 3));
             })
@@ -1930,8 +2100,8 @@ app.get(['/:auth/monitor/:ke/:mid/:f', '/:auth/monitor/:ke/:mid/:f/:ff', '/:auth
                     if (r.mode !== req.params.f) {
                         r.mode = req.params.f;
                         s.group[r.ke].mon_conf[r.mid] = r;
-                        s.tx({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'GRP_' + r.ke);
-                        s.tx({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'STR_' + r.ke);
+                        s.emitToRoom({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'GRP_' + r.ke);
+                        s.emitToRoom({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'STR_' + r.ke);
                         s.camera('stop', r);
                         if (req.params.f !== 'stop') {
                             s.camera(req.params.f, r);
@@ -1966,8 +2136,8 @@ app.get(['/:auth/monitor/:ke/:mid/:f', '/:auth/monitor/:ke/:mid/:f/:ff', '/:auth
                                 s.camera('stop', r);
                                 r.mode = 'stop';
                                 s.group[r.ke].mon_conf[r.mid] = r;
-                                s.tx({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'GRP_' + r.ke);
-                                s.tx({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'STR_' + r.ke);
+                                s.emitToRoom({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'GRP_' + r.ke);
+                                s.emitToRoom({ f: 'monitor_edit', mid: r.id, ke: r.ke, mon: r }, 'STR_' + r.ke);
                             }, req.timeout);
                             req.ret.end_at = s.moment(new Date, 'YYYY-MM-DD HH:mm:ss').add(req.timeout, 'milliseconds');
                         }
@@ -2024,7 +2194,15 @@ app.get(['/:auth/videos/:ke/:id/:file/:mode', '/:auth/videos/:ke/:id/:file/:mode
                             } else {
                                 req.ret.ok = true;
                                 sql.query('UPDATE Videos SET status=? WHERE ke=? AND mid=? AND time=?', [req.params.f, req.params.ke, req.params.id, s.nameToTime(req.params.file)])
-                                s.tx({ f: 'video_edit', status: req.params.f, filename: r.filename, mid: r.mid, ke: r.ke, time: s.nameToTime(r.filename), end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss') }, 'GRP_' + r.ke);
+                                s.emitToRoom({
+                                    f: 'video_edit',
+                                    status: req.params.f,
+                                    filename: r.filename,
+                                    mid: r.mid,
+                                    ke: r.ke,
+                                    time: s.nameToTime(r.filename),
+                                    end: s.moment(new Date, 'YYYY-MM-DD HH:mm:ss')
+                                }, 'GRP_' + r.ke);
                             }
                             break;
                         case 'delete':
@@ -2083,7 +2261,7 @@ try {
     }
     setInterval(() => {
         s.cpuUsage((d) => {
-            s.tx({ f: 'os', cpu: d, ram: s.ramUsage() }, 'CPU');
+            s.emitToRoom({ f: 'os', cpu: d, ram: s.ramUsage() }, 'CPU');
         })
     }, 5000);
 } catch (err) { console.log('CPU indicator will not work. Continuing...') }
@@ -2092,7 +2270,7 @@ s.disk = (x) => {
     exec('echo 3 > /proc/sys/vm/drop_caches')
     df((er, d) => {
         if (er) { clearInterval(s.disk_check); } else { er = { f: 'disk', data: d } }
-        s.tx(er, 'CPU')
+        s.emitToRoom(er, 'CPU')
     });
 };
 s.disk_check = setInterval(() => { s.disk() }, 60000 * 20);
