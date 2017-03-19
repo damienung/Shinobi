@@ -2236,28 +2236,15 @@ setTimeout(() => {
         }
     });
 }, 1500)
+
 try {
-    s.cpuUsage = (e, f) => {
-        switch (s.platform) {
-            case 'darwin':
-                f = "ps -A -o %cpu | awk '{s+=$1} END {print s}'";
-                break;
-            case 'linux':
-                f = 'top -b -n 2 | grep "^%Cpu" | awk \'{print $2}\' | tail -n1';
-                break;
-        }
-        exec(f, { encoding: 'utf8' }, (err, d) => {
-            e(d)
-        });
+    s.cpuUsage = (e) => {
+        e(os.loadavg()[0]); //1 minute load average
     }
     s.ramUsage = () => {
-        let cmd;
-        if (os.platform() == 'darwin')
-            cmd = "vm_stat | awk '/^Pages free: /{f=substr($3,1,length($3)-1)} /^Pages active: /{a=substr($3,1,length($3-1))} /^Pages inactive: /{i=substr($3,1,length($3-1))} /^Pages speculative: /{s=substr($3,1,length($3-1))} /^Pages wired down: /{w=substr($4,1,length($4-1))} /^Pages occupied by compressor: /{c=substr($5,1,length($5-1)); print ((a+w)/(f+a+i+w+s+c))*100;}'"
-        else
-            cmd = "free | grep Mem | awk '{print $4/$2 * 100.0}'";
-
-        return execSync(cmd, { encoding: 'utf8' });
+        let totalMem = os.totalmem();
+        let usedMem = totalMem - os.freemem();
+        return usedMem / totalMem * 100;
     }
     setInterval(() => {
         s.cpuUsage((d) => {
@@ -2265,6 +2252,7 @@ try {
         })
     }, 5000);
 } catch (err) { console.log('CPU indicator will not work. Continuing...') }
+
 //check disk space every 20 minutes
 s.disk = (x) => {
     exec('echo 3 > /proc/sys/vm/drop_caches')
