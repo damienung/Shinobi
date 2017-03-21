@@ -45,6 +45,7 @@ let videofeed = require('./modules/videofeed.js')
 
 let s = { platform: os.platform(), s: JSON.stringify }
 let sql = require('./modules/database.js').getConnection()
+let network = require('./modules/network.js')
 
 videofeed.killOpenVideoFeeds()
 
@@ -81,45 +82,7 @@ s.moment_noOffset = (e, x) => {
   if (!x) { x = 'YYYY-MM-DDTHH-mm-ss' }
   return moment(e).format(x)
 }
-s.ipRange = (startIp, endIp) => {
-  let startLong = s.toLong(startIp)
-  let endLong = s.toLong(endIp)
-  if (startLong > endLong) {
-    let tmp = startLong
-    startLong = endLong
-    endLong = tmp
-  }
-  let rangeArray = []
-  let i
-  for (i = startLong; i <= endLong; i++) {
-    rangeArray.push(s.fromLong(i))
-  }
-  return rangeArray
-}
-s.portRange = (lowEnd, highEnd) => {
-  let list = []
-  for (let i = lowEnd; i <= highEnd; i++) {
-    list.push(i)
-  }
-  return list
-}
-// toLong taken from NPM package 'ip'
-s.toLong = (ip) => {
-  let ipl = 0
-  ip.split('.').forEach((octet) => {
-    ipl <<= 8
-    ipl += parseInt(octet)
-  })
-  return (ipl >>> 0)
-}
 
-// fromLong taken from NPM package 'ip'
-s.fromLong = (ipl) => {
-  return ((ipl >>> 24) + '.' +
-        (ipl >> 16 & 255) + '.' +
-        (ipl >> 8 & 255) + '.' +
-        (ipl & 255))
-}
 s.kill = (x, e, p) => {
   if (s.group[e.ke] && s.group[e.ke].mon[e.id]) {
     if (s.group[e.ke].mon[e.id].spawn) {
@@ -144,6 +107,7 @@ s.kill = (x, e, p) => {
     }, 1000)
   }
 }
+
 s.log = (e, x) => {
   if (!x || !e.mid) { return }
   if (e.details && e.details.sqllog === 1) {
@@ -1373,14 +1337,14 @@ io.on('connection', (cn) => {
               d.IP_RANGE_START = d.ip
               d.IP_RANGE_END = d.ip
             }
-            d.IP_LIST = s.ipRange(d.IP_RANGE_START, d.IP_RANGE_END)
+            d.IP_LIST = network.ipRange(d.IP_RANGE_START, d.IP_RANGE_END)
                         // check port
             d.port = d.port.replace(/ /g, '')
             if (d.port.indexOf('-') > -1) {
               d.port = d.port.split('-')
               d.PORT_RANGE_START = d.port[0]
               d.PORT_RANGE_END = d.port[1]
-              d.PORT_LIST = s.portRange(d.PORT_RANGE_START, d.PORT_RANGE_END)
+              d.PORT_LIST = network.portRange(d.PORT_RANGE_START, d.PORT_RANGE_END)
             } else {
               d.PORT_LIST = d.port.split(',')
             }
