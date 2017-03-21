@@ -43,7 +43,7 @@ let Cam = require('onvif').Cam
 let config = require('./conf.json')
 let videofeed = require('./modules/videofeed.js')
 
-let s = { child_help: false, platform: os.platform(), s: JSON.stringify }
+let s = { platform: os.platform(), s: JSON.stringify }
 let sql = require('./modules/database.js').getConnection()
 
 videofeed.killOpenVideoFeeds()
@@ -135,17 +135,13 @@ s.kill = (x, e, p) => {
       clearTimeout(s.group[e.ke].mon[e.id].record.capturing)
             //            if(s.group[e.ke].mon[e.id].record.request){s.group[e.ke].mon[e.id].record.request.abort();delete(s.group[e.ke].mon[e.id].record.request);}
     }
-    if (s.group[e.ke].mon[e.id].child_node) {
-
-    } else {
-      if (!x || x === 1) { return }
-      p = x.pid
-      x.stdin.pause()
-      setTimeout(() => {
-        x.kill('SIGTERM')
-        setTimeout(() => { exec('kill -9 ' + p) }, 1000)
-      }, 1000)
-    }
+    if (!x || x === 1) { return }
+    p = x.pid
+    x.stdin.pause()
+    setTimeout(() => {
+      x.kill('SIGTERM')
+      setTimeout(() => { exec('kill -9 ' + p) }, 1000)
+    }, 1000)
   }
 }
 s.log = (e, x) => {
@@ -287,44 +283,40 @@ s.video = (x, e) => {
           e.filename = s.group[e.ke].mon[e.id].open
           e.ext = s.group[e.ke].mon[e.id].open_ext
         }
-        if (s.group[e.ke].mon[e.id].child_node) {
-          
-        } else {
-          if (fs.existsSync(e.dir + e.filename + '.' + e.ext)) {
-            e.filesize = fs.statSync(e.dir + e.filename + '.' + e.ext)['size']
-            if ((e.filesize / 100000).toFixed(2) > 0.25) {
-              e.save = [e.filesize, e.frames, 1, e.id, e.ke, s.nameToTime(e.filename)]
-              if (!e.status) { e.save.push(0) } else { e.save.push(e.status) }
-              sql.query('UPDATE Videos SET `size`=?,`frames`=?,`status`=? WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save)
-              s.emitToRoom({
-                f: 'video_build_success',
-                filename: e.filename + '.' + e.ext,
-                mid: e.id,
-                ke: e.ke,
-                time: s.nameToTime(e.filename),
-                size: e.filesize,
-                end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss')
-              }, 'GRP_' + e.ke)
+        if (fs.existsSync(e.dir + e.filename + '.' + e.ext)) {
+          e.filesize = fs.statSync(e.dir + e.filename + '.' + e.ext)['size']
+          if ((e.filesize / 100000).toFixed(2) > 0.25) {
+            e.save = [e.filesize, e.frames, 1, e.id, e.ke, s.nameToTime(e.filename)]
+            if (!e.status) { e.save.push(0) } else { e.save.push(e.status) }
+            sql.query('UPDATE Videos SET `size`=?,`frames`=?,`status`=? WHERE `mid`=? AND `ke`=? AND `time`=? AND `status`=?', e.save)
+            s.emitToRoom({
+              f: 'video_build_success',
+              filename: e.filename + '.' + e.ext,
+              mid: e.id,
+              ke: e.ke,
+              time: s.nameToTime(e.filename),
+              size: e.filesize,
+              end: s.moment(new Date(), 'YYYY-MM-DD HH:mm:ss')
+            }, 'GRP_' + e.ke)
 
                             // cloud auto savers
                             // webdav
-              if (s.group[e.ke].webdav && s.group[e.ke].init.webdav_save === '1') {
-                fs.readFile(e.dir + e.filename + '.' + e.ext, (err, data) => {
-                  s.group[e.ke].webdav.putFileContents(s.group[e.ke].init.webdav_dir + e.ke + '/' + e.mid + '/' + e.filename + '.' + e.ext, 'binary', data)
+            if (s.group[e.ke].webdav && s.group[e.ke].init.webdav_save === '1') {
+              fs.readFile(e.dir + e.filename + '.' + e.ext, (err, data) => {
+                s.group[e.ke].webdav.putFileContents(s.group[e.ke].init.webdav_dir + e.ke + '/' + e.mid + '/' + e.filename + '.' + e.ext, 'binary', data)
                                         .catch((err) => {
                                           s.log(e, { type: 'Webdav Error', msg: { msg: 'Cannot save. Did you make the folders <b>/' + e.ke + '/' + e.id + '</b> inside your chosen save directory?', info: err }, ffmpeg: s.group[e.ke].mon[e.id].ffmpeg })
                                           console.error(err)
                                         })
-                })
-              }
-            } else {
-              s.video('delete', e)
-              s.log(e, { type: 'File Corrupt', msg: { ffmpeg: s.group[e.ke].mon[e.mid].ffmpeg, filesize: (e.filesize / 100000).toFixed(2) } })
+              })
             }
           } else {
             s.video('delete', e)
-            s.log(e, { type: 'File Not Exist', msg: 'Cannot save non existant file. Something went wrong.', ffmpeg: s.group[e.ke].mon[e.id].ffmpeg })
+            s.log(e, { type: 'File Corrupt', msg: { ffmpeg: s.group[e.ke].mon[e.mid].ffmpeg, filesize: (e.filesize / 100000).toFixed(2) } })
           }
+        } else {
+          s.video('delete', e)
+          s.log(e, { type: 'File Not Exist', msg: 'Cannot save non existant file. Something went wrong.', ffmpeg: s.group[e.ke].mon[e.id].ffmpeg })
         }
       }
       delete (s.group[e.ke].mon[e.id].open)
