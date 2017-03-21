@@ -48,22 +48,10 @@ let sql = require('./modules/database.js').getConnection()
 
 videofeed.killOpenVideoFeeds()
 
-// key for child servers
-s.child_nodes = {}
-s.child_key = '3123asdasdf1dtj1hjk23sdfaasd12asdasddfdbtnkkfgvesra3asdsd3123afdsfqw345'
 s.md5 = (x) => { return crypto.createHash('md5').update(x).digest('hex') }
-s.tx = (z, y, x) => {
-  if (x) { return x.broadcast.to(y).emit('f', z) }
-  io.to(y).emit('f', z)
-}
 
 s.emitToRoom = (data, room) => {
   io.to(room).emit('f', data)
-}
-
-s.cx = (z, y, x) => {
-  if (x) { return x.broadcast.to(y).emit('c', z) }
-  io.to(y).emit('c', z)
 }
 
 // load camera controller vars
@@ -148,7 +136,7 @@ s.kill = (x, e, p) => {
             //            if(s.group[e.ke].mon[e.id].record.request){s.group[e.ke].mon[e.id].record.request.abort();delete(s.group[e.ke].mon[e.id].record.request);}
     }
     if (s.group[e.ke].mon[e.id].child_node) {
-      s.cx({ f: 'kill', d: s.init('clean', e) }, s.group[e.ke].mon[e.id].child_node_id)
+
     } else {
       if (!x || x === 1) { return }
       p = x.pid
@@ -238,14 +226,6 @@ s.init = (x, e) => {
         })
       }
       break
-    case 'sync':
-      e.cn = Object.keys(s.child_nodes)
-      e.cn.forEach((v) => {
-        if (s.group[e.ke]) {
-          s.cx({ f: 'sync', sync: s.init('clean', s.group[e.ke].mon[e.mid]), ke: e.ke, mid: e.mid }, s.child_nodes[v].cnid)
-        }
-      })
-      break
     case 'clean':
       x = { keys: Object.keys(e), ar: {} }
       x.keys.forEach((v) => {
@@ -308,7 +288,7 @@ s.video = (x, e) => {
           e.ext = s.group[e.ke].mon[e.id].open_ext
         }
         if (s.group[e.ke].mon[e.id].child_node) {
-          s.cx({ f: 'close', d: s.init('clean', e) }, s.group[e.ke].mon[e.id].child_node_id)
+          
         } else {
           if (fs.existsSync(e.dir + e.filename + '.' + e.ext)) {
             e.filesize = fs.statSync(e.dir + e.filename + '.' + e.ext)['size']
@@ -999,38 +979,7 @@ s.camera = (x, e, cn, tx) => {
         }
       }
                 // start drawing files
-      if (s.child_help === true) {
-        e.ch = Object.keys(s.child_nodes)
-        if (e.ch.length > 0) {
-          e.ch_stop = 0
-          e.fn = (n) => {
-            connectionTester.test(e.hosty, e.port, 2000, (err, o) => {
-              if (o.success === true) {
-                s.video('open', e)
-                e.frames = 0
-                s.group[e.ke].mon[e.id].spawn = {}
-                s.group[e.ke].mon[e.id].child_node = n
-                s.cx({ f: 'spawn', d: s.init('clean', e), mon: s.init('clean', s.group[e.ke].mon[e.mid]) }, s.group[e.ke].mon[e.mid].child_node_id)
-              } else {
-                console.log('Cannot Connect, Retrying...', e.id)
-                e.error_fatal()
-              }
-            })
-          }
-          e.ch.forEach((n) => {
-            if (e.ch_stop === 0 && s.child_nodes[n].cpu < 80) {
-              e.ch_stop = 1
-              s.group[e.ke].mon[e.mid].child_node = n
-              s.group[e.ke].mon[e.mid].child_node_id = s.child_nodes[n].cnid
-              e.fn(n)
-            }
-          })
-        } else {
-          e.fn()
-        }
-      } else {
-        e.fn()
-      }
+      e.fn()
       break
   }
 
@@ -1638,58 +1587,7 @@ io.on('connection', (cn) => {
         break
     }
   })
-        // functions for dispersing work to child servers;
-  cn.on('c', (d) => {
-            //        if(!cn.ke&&d.socket_key===s.child_key){
-    if (!cn.shinobi_child && d.f === 'init') {
-      cn.ip = cn.request.connection.remoteAddress
-      cn.name = d.u.name
-      cn.shinobi_child = 1
-      tx = (z) => { cn.emit('c', z) }
-      if (!s.child_nodes[cn.ip]) { s.child_nodes[cn.ip] = d.u };
-      s.child_nodes[cn.ip].cnid = cn.id
-      s.child_nodes[cn.ip].cpu = 0
-      tx({ f: 'init_success', child_nodes: s.child_nodes })
-    } else {
-      if (d.f !== 's.tx') { console.log(d) };
-      switch (d.f) {
-        case 'cpu':
-          s.child_nodes[cn.ip].cpu = d.cpu
-          break
-        case 'sql':
-          sql.query(d.query, d.values)
-          break
-        case 'camera':
-          s.camera(d.mode, d.data)
-          break
-        case 's.tx':
-          s.emitToRoom(d.data, d.to)
-          break
-        case 's.log':
-          s.log(d.data, d.to)
-          break
-        case 'created_file':
-          d.dir = s.dir.videos + d.d.ke + '/' + d.d.mid + '/'
-          console.log('created_file ' + d.d.mid, d.dir + d.filename)
-          fs.writeFile(d.dir + d.filename, d.created_file, 'binary', (err, data) => {
-            if (err) {
-              return console.error('created_file' + d.d.mid, err)
-            }
-            tx({ f: 'delete_file', file: d.filename, ke: d.d.ke, mid: d.d.mid })
-            s.emitToRoom({
-              f: 'video_build_success',
-              filename: s.group[d.d.ke].mon[d.d.mid].open + '.' + s.group[d.d.ke].mon[d.d.mid].open_ext,
-              mid: d.d.mid,
-              ke: d.d.ke,
-              time: s.nameToTime(s.group[d.d.ke].mon[d.d.mid].open),
-              end: s.moment_noOffset(new Date(), 'YYYY-MM-DD HH:mm:ss')
-            }, 'GRP_' + d.d.ke)
-          })
-          break
-      }
-    }
-            //        }
-  })
+
         // embed functions
   cn.on('e', (d) => {
     tx = (z) => {
@@ -1704,9 +1602,6 @@ io.on('connection', (cn) => {
           cn.ke = d.ke
           if (!cn.mid) { cn.mid = {} }
           cn.mid[d.id] = {}
-                    //                    if(!s.group[d.ke].embed){s.group[d.ke].embed={}}
-                    //                    if(!s.group[d.ke].embed[d.mid]){s.group[d.ke].embed[d.mid]={}}
-                    //                    s.group[d.ke].embed[d.mid][cn.id]={}
 
           s.camera('watch_on', d, cn, tx)
           cn.join('MON_' + d.id)
@@ -1744,9 +1639,6 @@ io.on('connection', (cn) => {
     }
     if (cn.cron) {
       delete (s.cron)
-    }
-    if (cn.shinobi_child) {
-      delete (s.child_nodes[cn.ip])
     }
   })
 })
