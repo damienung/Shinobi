@@ -20,7 +20,7 @@
 process.on('uncaughtException', (err) => {
   console.error('uncaughtException', err)
 })
-
+let config = require('./conf.json')
 let express = require('express')
 let app = express()
 let server = require('./modules/server.js').getServer(app)
@@ -40,10 +40,15 @@ let connectionTester = require('connection-tester')
 let events = require('events')
 let df = require('node-df')
 let Cam = require('onvif').Cam
-let config = require('./conf.json')
+
 let videofeed = require('./modules/videofeed.js')
 
 let s = { platform: os.platform(), s: JSON.stringify }
+
+let machineStats = require('./modules/machine-stats.js')
+machineStats.startEmitStats(io)
+
+
 let sql = require('./modules/database.js').getConnection()
 let network = require('./modules/network.js')
 
@@ -96,7 +101,6 @@ s.kill = (x, e, p) => {
     clearTimeout(s.group[e.ke].mon[e.id].watchdog_stop)
     if (e && s.group[e.ke].mon[e.id].record) {
       clearTimeout(s.group[e.ke].mon[e.id].record.capturing)
-            //            if(s.group[e.ke].mon[e.id].record.request){s.group[e.ke].mon[e.id].record.request.abort();delete(s.group[e.ke].mon[e.id].record.request);}
     }
     if (!x || x === 1) { return }
     p = x.pid
@@ -2070,22 +2074,6 @@ setTimeout(() => {
     }
   })
 }, 1500)
-
-try {
-  s.cpuUsage = (e) => {
-    e(os.loadavg()[0]) // 1 minute load average
-  }
-  s.ramUsage = () => {
-    let totalMem = os.totalmem()
-    let usedMem = totalMem - os.freemem()
-    return usedMem / totalMem * 100
-  }
-  setInterval(() => {
-    s.cpuUsage((d) => {
-      s.emitToRoom({ f: 'os', cpu: d, ram: s.ramUsage() }, 'CPU')
-    })
-  }, 5000)
-} catch (err) { console.log('CPU indicator will not work. Continuing...') }
 
 // check disk space every 20 minutes
 s.disk = (x) => {
