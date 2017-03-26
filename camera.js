@@ -24,7 +24,8 @@ let config = require('./conf.json')
 let express = require('express')
 let app = express()
 let server = require('./modules/server.js').getServer(app)
-let io = require('socket.io')(server)
+let serverSocket = require('socket.io')(server)
+let accountManagement = require('./modules/account-management.js')
 
 let fs = require('fs')
 let os = require('os')
@@ -46,8 +47,7 @@ let videofeed = require('./modules/videofeed.js')
 let s = { platform: os.platform(), s: JSON.stringify }
 
 let machineStats = require('./modules/machine-stats.js')
-machineStats.startEmitStats(io)
-
+machineStats.startEmitStats(serverSocket)
 
 let sql = require('./modules/database.js').getConnection()
 let network = require('./modules/network.js')
@@ -57,7 +57,7 @@ videofeed.killOpenVideoFeeds()
 s.md5 = (x) => { return crypto.createHash('md5').update(x).digest('hex') }
 
 s.emitToRoom = (data, room) => {
-  io.to(room).emit('f', data)
+  serverSocket.to(room).emit('f', data)
 }
 
 // load camera controller vars
@@ -952,28 +952,62 @@ s.camera = (x, e, cn, tx) => {
 
 /// /socket controller
 s.cn = (cn) => { return { id: cn.id, ke: cn.ke, uid: cn.uid } }
-io.on('connection', (cn) => {
+
+// Admin events
+serverSocket.on('connection', (socket) => {
+  socket.on('adminInit', (adminMsg) => {
+    sql.query('SELECT * FROM Users WHERE auth=? && uid=?', [adminMsg.auth, adminMsg.uid], (err, r) => {
+      if (err) {
+        console.log('adminInit:' + err)
+      }
+      if (r && r[0]) {
+        if (!s.group[adminMsg.ke]) { s.group[adminMsg.ke] = { users: {} } }
+        if (!s.group[adminMsg.ke].users[adminMsg.auth]) { s.group[adminMsg.ke].users[adminMsg.auth] = { cnid: socket.id } }
+        socket.join('ADM_' + adminMsg.ke)
+        socket.ke = adminMsg.ke
+        socket.uid = adminMsg.uid
+        socket.auth = adminMsg.auth
+      } else {
+        socket.disconnect()
+      }
+    })
+  })
+  socket.on('adminAccounts', (adminMsg) => {
+    let isAuthorised = s.isAuthorised({ auth: adminMsg.auth, ke: adminMsg.ke, id: adminMsg.id }, sql)
+    let deleteUser = () => {
+      if (adminMsg.ff && adminMsg.ff === 'delete') {
+        accountManagement.deleteSubAccount(adminMsg.$uid, adminMsg.mail, serverSocket)
+      }
+    }
+
+    if (isAuthorised) {
+      deleteUser()
+    }
+  })
+})
+
+serverSocket.on('connection', (socket) => {
   let tx
-  cn.on('f', (d) => {
-    if (!cn.ke && d.f === 'init') {
-      cn.ip = cn.request.connection.remoteAddress
+  socket.on('f', (d) => {
+    if (!socket.ke && d.f === 'init') {
+      socket.ip = socket.request.connection.remoteAddress
       tx = (z) => {
-        if (!z.ke) { z.ke = cn.ke };
-        cn.emit('f', z)
+        if (!z.ke) { z.ke = socket.ke };
+        socket.emit('f', z)
       }
       sql.query('SELECT ke,uid,auth,mail,details FROM Users WHERE ke=? AND auth=? AND uid=?', [d.ke, d.auth, d.uid], (err, r) => {
         if (r && r[0]) {
           r = r[0]
-          cn.join('GRP_' + d.ke)
-          cn.join('CPU')
-          cn.ke = d.ke
-          cn.uid = d.uid
-          cn.auth = d.auth
+          socket.join('GRP_' + d.ke)
+          socket.join('CPU')
+          socket.ke = d.ke
+          socket.uid = d.uid
+          socket.auth = d.auth
           if (!s.group[d.ke]) s.group[d.ke] = {}
                     //                    if(!s.group[d.ke].vid)s.group[d.ke].vid={};
           if (!s.group[d.ke].users) s.group[d.ke].users = {}
                     //                    s.group[d.ke].vid[cn.id]={uid:d.uid};
-          s.group[d.ke].users[d.auth] = { cnid: cn.id }
+          s.group[d.ke].users[d.auth] = { cnid: socket.id }
           if (!s.group[d.ke].mon) {
             s.group[d.ke].mon = {}
             if (!s.group[d.ke].mon) { s.group[d.ke].mon = {} }
@@ -995,7 +1029,7 @@ io.on('connection', (cn) => {
                   totalmem: os.totalmem()
                 }
               })
-              s.disk(cn.id)
+              s.disk(socket.id)
               setTimeout(() => {
                 if (rr && rr[0]) {
                   rr.forEach((t) => {
@@ -1007,12 +1041,12 @@ io.on('connection', (cn) => {
           })
         } else {
           tx({ ok: false, msg: 'Not Authorized', token_used: d.auth, ke: d.ke })
-          cn.disconnect()
+          socket.disconnect()
         }
       })
       return
     }
-    if ((d.id || d.uid || d.mid) && cn.ke) {
+    if ((d.id || d.uid || d.mid) && socket.ke) {
       try {
         switch (d.f) {
           case 'update':
@@ -1050,8 +1084,8 @@ io.on('connection', (cn) => {
               case 'delete':
                 d.set = []
                 d.ar = []
-                d.form.ke = cn.ke
-                d.form.uid = cn.uid
+                d.form.ke = socket.ke
+                d.form.uid = socket.uid
                 delete (d.form.ip)
                 if (!d.form.code) { tx({ f: 'form_incomplete', form: 'APIs' }); return }
                 d.for = Object.keys(d.form)
@@ -1072,8 +1106,8 @@ io.on('connection', (cn) => {
                 d.set = []
                 d.qu = []
                 d.ar = []
-                d.form.ke = cn.ke
-                d.form.uid = cn.uid
+                d.form.ke = socket.ke
+                d.form.uid = socket.uid
                 d.form.code = s.gid(30)
                 d.form.details = '{}'
                 d.for = Object.keys(d.form)
@@ -1082,7 +1116,7 @@ io.on('connection', (cn) => {
                   d.qu.push('?')
                   d.ar.push(d.form[v])
                 })
-                d.ar.push(cn.ke)
+                d.ar.push(socket.ke)
                 sql.query('INSERT INTO API (' + d.set.join(',') + ') VALUES (' + d.qu.join(',') + ')', d.ar, (err, r) => {
                   d.form.time = s.moment(new Date(), 'YYYY-DD-MM HH:mm:ss')
                   if (!err) { tx({ f: 'api_key_added', form: d.form }) } else { console.log(err) }
@@ -1178,17 +1212,17 @@ io.on('connection', (cn) => {
                 })
                 break
               case 'delete':
-                if (!d.ke) { d.ke = cn.ke };
+                if (!d.ke) { d.ke = socket.ke };
                 if (d.mid) {
                   d.delete = 1
                   s.camera('stop', d)
                   s.emitToRoom({
                     f: 'monitor_delete',
-                    uid: cn.uid,
+                    uid: socket.uid,
                     mid: d.mid,
-                    ke: cn.ke
+                    ke: socket.ke
                   }, 'GRP_' + d.ke)
-                  s.log(d, { type: 'Monitor Deleted', msg: 'by user : ' + cn.uid })
+                  s.log(d, { type: 'Monitor Deleted', msg: 'by user : ' + socket.uid })
                   sql.query('DELETE FROM Monitors WHERE ke=? AND mid=?', [d.ke, d.mid])
                 }
                 break
@@ -1197,7 +1231,7 @@ io.on('connection', (cn) => {
                   d.set = []
                   d.ar = []
                   d.mon.mid = d.mon.mid.replace(/[^\w\s]/gi, '').replace(/ /g, '')
-                  if (!d.mon.ke) { d.mon.ke = cn.ke }
+                  if (!d.mon.ke) { d.mon.ke = socket.ke }
                   sql.query('SELECT * FROM Monitors WHERE ke=? AND mid=?', [d.mon.ke, d.mon.mid], (er, r) => {
                     d.tx = { f: 'monitor_edit', mid: d.mon.mid, ke: d.mon.ke, mon: d.mon }
                     if (r && r[0]) {
@@ -1211,7 +1245,7 @@ io.on('connection', (cn) => {
                       d.set = d.set.join(',')
                       d.ar.push(d.mon.ke)
                       d.ar.push(d.mon.mid)
-                      s.log(d, { type: 'Monitor Updated', msg: 'by user : ' + cn.uid })
+                      s.log(d, { type: 'Monitor Updated', msg: 'by user : ' + socket.uid })
                       sql.query('UPDATE Monitors SET ' + d.set + ' WHERE ke=? AND mid=?', d.ar)
                     } else {
                       d.tx.new = true
@@ -1226,7 +1260,7 @@ io.on('connection', (cn) => {
                                                 //                                        d.set.push('ke'),d.st.push('?'),d.ar.push(d.mon.ke);
                       d.set = d.set.join(',')
                       d.st = d.st.join(',')
-                      s.log(d, { type: 'Monitor Added', msg: 'by user : ' + cn.uid })
+                      s.log(d, { type: 'Monitor Added', msg: 'by user : ' + socket.uid })
                       sql.query('INSERT INTO Monitors (' + d.set + ') VALUES (' + d.st + ')', d.ar)
                     }
                     s.group[d.mon.ke].mon_conf[d.mon.mid] = d.mon
@@ -1244,8 +1278,8 @@ io.on('connection', (cn) => {
                 break
               case 'record_on':
               case 'record_off':
-                if (!d.ke) { d.ke = cn.ke }
-                sql.query('SELECT * FROM Monitors WHERE ke=? AND mid=?', [cn.ke, d.id], (err, r) => {
+                if (!d.ke) { d.ke = socket.ke }
+                sql.query('SELECT * FROM Monitors WHERE ke=? AND mid=?', [socket.ke, d.id], (err, r) => {
                   if (r && r[0]) {
                     r = r[0]
                     if (d.ff === 'record_on') { d.mode = 'record' } else { d.mode = 'start' };
@@ -1262,11 +1296,11 @@ io.on('connection', (cn) => {
                 })
                 break
               case 'watch_on':
-                if (!d.ke) { d.ke = cn.ke }
+                if (!d.ke) { d.ke = socket.ke }
                 s.init(0, { mid: d.id, ke: d.ke })
                 if (!s.group[d.ke] || !s.group[d.ke].mon[d.id] || s.group[d.ke].mon[d.id].started === 0) { return false }
-                s.camera(d.ff, d, cn, tx)
-                cn.join('MON_' + d.id)
+                s.camera(d.ff, d, socket, tx)
+                socket.join('MON_' + d.id)
                 if (s.group[d.ke] && s.group[d.ke].mon && s.group[d.ke].mon[d.id] && s.group[d.ke].mon[d.id].watch) {
                   tx({ f: 'monitor_watch_on', id: d.id, ke: d.ke }, 'MON_' + d.id)
                   s.emitToRoom({
@@ -1277,9 +1311,9 @@ io.on('connection', (cn) => {
                 }
                 break
               case 'watch_off':
-                if (!d.ke) { d.ke = cn.ke };
-                cn.leave('MON_' + d.id)
-                s.camera(d.ff, d, cn, tx)
+                if (!d.ke) { d.ke = socket.ke };
+                socket.leave('MON_' + d.id)
+                s.camera(d.ff, d, socket, tx)
                 s.emitToRoom({
                   viewers: d.ob,
                   ke: d.ke,
@@ -1288,10 +1322,10 @@ io.on('connection', (cn) => {
                 break
               case 'start':
               case 'stop':
-                sql.query('SELECT * FROM Monitors WHERE ke=? AND mid=?', [cn.ke, d.id], (err, r) => {
+                sql.query('SELECT * FROM Monitors WHERE ke=? AND mid=?', [socket.ke, d.id], (err, r) => {
                   if (r && r[0]) {
                     r = r[0]
-                    s.camera(d.ff, { type: r.type, url: s.init('url', r), id: d.id, mode: d.ff, ke: cn.ke })
+                    s.camera(d.ff, { type: r.type, url: s.init('url', r), id: d.id, mode: d.ff, ke: socket.ke })
                   }
                 })
                 break
@@ -1305,22 +1339,22 @@ io.on('connection', (cn) => {
             }
             break
           case 'ffprobe':
-            if (s.group[cn.ke].users[cn.auth]) {
+            if (s.group[socket.ke].users[socket.auth]) {
               switch (d.ff) {
                 case 'stop':
-                  exec('kill -9 ' + s.group[cn.ke].users[cn.auth].ffprobe.pid)
+                  exec('kill -9 ' + s.group[socket.ke].users[socket.auth].ffprobe.pid)
                   break
                 default:
-                  if (s.group[cn.ke].users[cn.auth].ffprobe) {
-                    exec('kill -9 ' + s.group[cn.ke].users[cn.auth].ffprobe.pid)
+                  if (s.group[socket.ke].users[socket.auth].ffprobe) {
+                    exec('kill -9 ' + s.group[socket.ke].users[socket.auth].ffprobe.pid)
                   }
-                  s.group[cn.ke].users[cn.auth].ffprobe = spawn('ffprobe', d.query.split(' '))
-                  tx({ f: 'ffprobe_start', pid: s.group[cn.ke].users[cn.auth].ffprobe.pid })
-                  s.group[cn.ke].users[cn.auth].ffprobe.on('exit', (data) => {
-                    tx({ f: 'ffprobe_stop', pid: s.group[cn.ke].users[cn.auth].ffprobe.pid })
+                  s.group[socket.ke].users[socket.auth].ffprobe = spawn('ffprobe', d.query.split(' '))
+                  tx({ f: 'ffprobe_start', pid: s.group[socket.ke].users[socket.auth].ffprobe.pid })
+                  s.group[socket.ke].users[socket.auth].ffprobe.on('exit', (data) => {
+                    tx({ f: 'ffprobe_stop', pid: s.group[socket.ke].users[socket.auth].ffprobe.pid })
                   })
-                  s.group[cn.ke].users[cn.auth].ffprobe.stderr.on('data', (data) => {
-                    tx({ f: 'ffprobe_data', data: data.toString('utf8'), pid: s.group[cn.ke].users[cn.auth].ffprobe.pid })
+                  s.group[socket.ke].users[socket.auth].ffprobe.stderr.on('data', (data) => {
+                    tx({ f: 'ffprobe_data', data: data.toString('utf8'), pid: s.group[socket.ke].users[socket.auth].ffprobe.pid })
                   })
                                     // auto kill in 30 seconds
                   setTimeout(() => {
@@ -1403,11 +1437,11 @@ io.on('connection', (cn) => {
     }
   })
     // functions for retrieving cron announcements
-  cn.on('ocv', (d) => {
+  socket.on('ocv', (d) => {
     switch (d.f) {
       case 'init':
-        s.ocv = { started: moment(), id: cn.id, plug: d.plug }
-        cn.ocv = 1
+        s.ocv = { started: moment(), id: socket.id, plug: d.plug }
+        socket.ocv = 1
         s.emitToRoom({
           f: 'detector_plugged',
           plug: d.plug
@@ -1465,7 +1499,7 @@ io.on('connection', (cn) => {
     }
   })
         // functions for retrieving cron announcements
-  cn.on('cron', (d) => {
+  socket.on('cron', (d) => {
     switch (d.f) {
       case 'init':
         s.cron = { started: moment(), last_run: moment() }
@@ -1486,50 +1520,15 @@ io.on('connection', (cn) => {
         break
     }
   })
-        // admin page socket functions
-  cn.on('a', (d) => {
-    if (!cn.shinobi_child && d.f === 'init') {
-      sql.query('SELECT * FROM Users WHERE auth=? && uid=?', [d.auth, d.uid], (err, r) => {
-        if (r && r[0]) {
-          if (!s.group[d.ke]) { s.group[d.ke] = { users: {} } }
-          if (!s.group[d.ke].users[d.auth]) { s.group[d.ke].users[d.auth] = { cnid: cn.id } }
-          cn.join('ADM_' + d.ke)
-          cn.ke = d.ke
-          cn.uid = d.uid
-          cn.auth = d.auth
-        } else {
-          cn.disconnect()
-        }
-      })
-    } else {
-      s.auth({ auth: d.auth, ke: d.ke, id: d.id }, () => {
-        switch (d.f) {
-          case 'accounts':
-            switch (d.ff) {
-              case 'delete':
-                sql.query('DELETE FROM Users WHERE uid=? AND ke=? AND mail=?', [d.$uid, cn.ke, d.mail])
-                s.emitToRoom({
-                  f: 'delete_sub_account',
-                  ke: cn.ke,
-                  uid: d.$uid,
-                  mail: d.mail
-                }, 'ADM_' + d.ke)
-                break
-            }
-            break
-        }
-      }, null, null, sql)
-    }
-  })
         // functions for webcam recorder
-  cn.on('r', (d) => {
+  socket.on('r', (d) => {
     if (!s.group[d.ke] || !s.group[d.ke].mon[d.mid]) { return }
     switch (d.f) {
       case 'monitor_frame':
         if (s.group[d.ke].mon[d.mid].started !== 1) {
           s.emitToRoom({
             error: 'Not Started'
-          }, cn.id)
+          }, socket.id)
           return false
         };
         if (s.group[d.ke] && s.group[d.ke].mon[d.mid] && s.group[d.ke].mon[d.mid].watch && Object.keys(s.group[d.ke].mon[d.mid].watch).length > 0) {
@@ -1549,23 +1548,23 @@ io.on('connection', (cn) => {
   })
 
         // embed functions
-  cn.on('e', (d) => {
+  socket.on('e', (d) => {
     tx = (z) => {
-      if (!z.ke) { z.ke = cn.ke };
-      cn.emit('f', z)
+      if (!z.ke) { z.ke = socket.ke };
+      socket.emit('f', z)
     }
     switch (d.f) {
       case 'init':
         if (!s.group[d.ke] || !s.group[d.ke].mon[d.id] || s.group[d.ke].mon[d.id].started === 0) { return false }
-        s.auth({ auth: d.auth, ke: d.ke, id: d.id }, () => {
-          cn.embedded = 1
-          cn.ke = d.ke
-          if (!cn.mid) { cn.mid = {} }
-          cn.mid[d.id] = {}
+        let initCameraWebsocket = () => {
+          socket.embedded = 1
+          socket.ke = d.ke
+          if (!socket.mid) { socket.mid = {} }
+          socket.mid[d.id] = {}
 
-          s.camera('watch_on', d, cn, tx)
-          cn.join('MON_' + d.id)
-          cn.join('STR_' + d.ke)
+          s.camera('watch_on', d, socket, tx)
+          socket.join('MON_' + d.id)
+          socket.join('STR_' + d.ke)
           if (s.group[d.ke] && s.group[d.ke].mon && s.group[d.ke].mon[d.id] && s.group[d.ke].mon[d.id].watch) {
             tx({ f: 'monitor_watch_on', id: d.id, ke: d.ke }, 'MON_' + d.id)
             s.emitToRoom({
@@ -1574,47 +1573,68 @@ io.on('connection', (cn) => {
               id: d.id
             }, 'MON_' + d.id)
           }
-        }, null, null, sql)
+        }
+        s.auth({ auth: d.auth, ke: d.ke, id: d.id }, (initCameraWebsocket), null, null, sql)
         break
     }
   })
-  cn.on('disconnect', () => {
-    if (cn.ke) {
-      if (cn.monitor_watching) {
-        cn.monitor_count = Object.keys(cn.monitor_watching)
-        if (cn.monitor_count.length > 0) {
-          cn.monitor_count.forEach((v) => {
-            s.camera('watch_off', { id: v, ke: cn.monitor_watching[v].ke }, s.cn(cn))
+  socket.on('disconnect', () => {
+    if (socket.ke) {
+      if (socket.monitor_watching) {
+        socket.monitor_count = Object.keys(socket.monitor_watching)
+        if (socket.monitor_count.length > 0) {
+          socket.monitor_count.forEach((v) => {
+            s.camera('watch_off', { id: v, ke: socket.monitor_watching[v].ke }, s.cn(socket))
           })
         }
       }
-      if (!cn.embedded) {
-        delete (s.group[cn.ke].users[cn.auth])
+      if (!socket.embedded) {
+        delete (s.group[socket.ke].users[socket.auth])
       }
             //            delete(s.group[cn.ke].vid[cn.id]);
     }
-    if (cn.ocv) {
+    if (socket.ocv) {
       s.emitToRoom({ f: 'detector_unplugged', plug: s.ocv.plug }, 'CPU')
       delete (s.ocv)
     }
-    if (cn.cron) {
+    if (socket.cron) {
       delete (s.cron)
     }
   })
 })
 // Authenticator
 s.api = {}
-s.auth = (reqParams, authenticationFunction, res, req, db) => {
+s.isAuthorised = (reqParams, db) => {
   if (s.group[reqParams.ke] && s.group[reqParams.ke].users && s.group[reqParams.ke].users[reqParams.auth]) {
-    authenticationFunction()
+    return true
   } else {
     if (s.api[reqParams.auth]) {
-      authenticationFunction()
+      return true
     } else {
       db.query('SELECT * FROM API WHERE code=?', [reqParams.auth], (err, r) => {
         if (r && r[0]) {
           s.api[reqParams.auth] = {}
-          authenticationFunction()
+          return true
+        } else {
+          return false
+        }
+      })
+    }
+  }
+}
+
+s.auth = (reqParams, authFunction, res, req, db) => {
+  if (s.group[reqParams.ke] && s.group[reqParams.ke].users && s.group[reqParams.ke].users[reqParams.auth]) {
+    authFunction()
+  } else {
+    if (s.api[reqParams.auth]) {
+      authFunction()
+    } else {
+      db.query('SELECT * FROM API WHERE code=?', [reqParams.auth], (err, r) => {
+        if (r && r[0]) {
+          s.api[reqParams.auth] = {}
+
+          authFunction()
         } else {
           if (req) {
             if (!req.ret) { req.ret = { ok: false } }
@@ -2086,6 +2106,6 @@ s.disk = (x) => {
 s.disk_check = setInterval(() => { s.disk() }, 60000 * 20)
 s.beat = () => {
   setTimeout(s.beat, 8000)
-  io.sockets.emit('ping', { beat: 1 })
+  serverSocket.sockets.emit('ping', { beat: 1 })
 }
 s.beat()
